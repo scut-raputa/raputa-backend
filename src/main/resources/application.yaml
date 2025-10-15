@@ -1,0 +1,30 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: raputa
+
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3306/raputa?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
+    username: yuuka
+    password: yuuka2025
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+
+  servlet:
+    multipart:
+      max-file-size: 50MB
+      max-request-size: 60MB
+
+security:
+  jwt:
+    secret: "change-me-please-THIS-IS-A-SECRET-KEY-AT-LEAST-32-CHARS"
+    exp-minutes: 720
+
+raputa:
+  storage:
+    tmp-dir: /tmp/raputa/tmp
