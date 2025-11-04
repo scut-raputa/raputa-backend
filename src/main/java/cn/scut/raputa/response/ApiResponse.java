@@ -21,6 +21,14 @@ public class ApiResponse<T> {
         return r;
     }
 
+    public static <T> ApiResponse<T> ok(T data, String message) {
+        ApiResponse<T> r = new ApiResponse<>();
+        r.code = 0;
+        r.message = message;
+        r.data = data;
+        return r;
+    }
+
     public static <T> ApiResponse<T> error(int code, String message) {
         ApiResponse<T> r = new ApiResponse<>();
         r.code = code;
