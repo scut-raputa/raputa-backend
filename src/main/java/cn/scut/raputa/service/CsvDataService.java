@@ -36,9 +36,21 @@ public class CsvDataService {
     private final ConcurrentHashMap<String, String> imuFileNames = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> gasFileNames = new ConcurrentHashMap<>();
 
+    private final ConcurrentHashMap<String, String> sessionPatientIds   = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, String> sessionPatientNames = new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<String, String> sessionDeviceNames  = new ConcurrentHashMap<>();
+
     //取出CSV文件路径目录
     public String getCsvDirectory() {
         return CSV_DIRECTORY;
+    }
+
+    public void setSessionMeta(String deviceId, String patientId, String patientName, String deviceName) {
+        sessionPatientIds.put(deviceId, patientId == null ? "" : patientId.trim());
+        sessionPatientNames.put(deviceId, patientName == null ? "" : patientName.trim());
+        sessionDeviceNames.put(deviceId, deviceName == null ? "" : deviceName.trim());
+        log.info("登记会话元信息 deviceId={}, patientId={}, patientName={}, deviceName={}",
+                deviceId, patientId, patientName, deviceName);
     }
 
 
@@ -58,11 +70,9 @@ public class CsvDataService {
             CSVWriter writer = imuWriters.computeIfAbsent(deviceId, id -> {
                 try {
                     String fileName = generateFileName(deviceId, "imu");
-                    imuFileNames.put(deviceId, fileName); // 保存文件名
+                    imuFileNames.put(deviceId, fileName);
                     Path filePath = createCsvFile(fileName);
-                    
                     CSVWriter csvWriter = new CSVWriter(new FileWriter(filePath.toFile(), true));
-                    // 如果是新文件，写入表头
                     if (Files.size(filePath) == 0) {
                         csvWriter.writeNext(new String[]{"timestamp", "x", "y", "z"});
                         csvWriter.flush();
@@ -107,11 +117,9 @@ public class CsvDataService {
             CSVWriter writer = gasWriters.computeIfAbsent(deviceId, id -> {
                 try {
                     String fileName = generateFileName(deviceId, "gas");
-                    gasFileNames.put(deviceId, fileName); // 保存文件名
+                    gasFileNames.put(deviceId, fileName);
                     Path filePath = createCsvFile(fileName);
-                    
                     CSVWriter csvWriter = new CSVWriter(new FileWriter(filePath.toFile(), true));
-                    // 如果是新文件，写入表头
                     if (Files.size(filePath) == 0) {
                         csvWriter.writeNext(new String[]{"timestamp", "flow"});
                         csvWriter.flush();
@@ -144,8 +152,23 @@ public class CsvDataService {
      * 生成文件名 - 包含时间戳，用于区分不同的连接会话
      */
     private String generateFileName(String deviceId, String dataType) {
-        String timestamp = LocalDateTime.now().format(FILE_NAME_FORMATTER);
-        return String.format("%s_%s_%s.csv", deviceId, dataType, timestamp);
+        String ts = LocalDateTime.now().format(FILE_NAME_FORMATTER);
+        String pid   = sanitize(sessionPatientIds.getOrDefault(deviceId, "unknown"));
+        String pname = sanitize(sessionPatientNames.getOrDefault(deviceId, "unknown"));
+        String dname = sanitize(sessionDeviceNames.getOrDefault(deviceId, deviceId)); // 没传就用deviceId兜底
+        return String.format("%s_%s_%s_%s_%s.csv", dataType, pid, pname, dname, ts);
+    }
+
+    private static String sanitize(String s) {
+        if (s == null) return "unknown";
+        String t = s.trim();
+        if (t.isEmpty()) return "unknown";
+        // 去除常见非法字符：\/:*?"<>| 与控制符；空白序列规整为单下划线
+        t = t.replaceAll("[\\\\/:*?\"<>|\\p{Cntrl}]+", "_");
+        t = t.replaceAll("\\s+", "_");
+        // 可选：长度截断，避免极长文件名
+        if (t.length() > 80) t = t.substring(0, 80);
+        return t;
     }
     
     /**

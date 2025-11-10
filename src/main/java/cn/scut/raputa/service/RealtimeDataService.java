@@ -124,6 +124,54 @@ public class RealtimeDataService {
         });
     }
 
+    public CompletableFuture<Boolean> startDataReceiving(
+            String deviceIp,
+            String deviceId,
+            String deviceName,
+            String patientId,
+            String patientName) {
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                DeviceConnection connection = new DeviceConnection(deviceId);
+
+                // 1) 先登记会话元信息（关键：必须在任何写入发生前）
+                csvDataService.setSessionMeta(deviceId, patientId, patientName, deviceName);
+
+                // 2) 建立TCP连接
+                Socket socket = new Socket(deviceIp, 6667);
+                socket.setSoTimeout(15000);
+                connection.socket = socket;
+                connection.inputStream  = socket.getInputStream();
+                connection.outputStream = socket.getOutputStream();
+                connection.isConnected.set(true);
+
+                // 3) 发送开始接收命令
+                String command = "true";
+                byte[] commandData = SocketTools.packSFream(command);
+                connection.outputStream.write(commandData);
+                connection.outputStream.flush();
+
+                log.info("成功连接到设备 {}:{}，开始接收数据", deviceIp, 6667);
+
+                // 4) 启动接收线程
+                connection.receiveThread = new Thread(() -> receiveDataLoop(connection));
+                connection.receiveThread.setDaemon(true);
+                connection.receiveThread.start();
+
+                // 5) 启动CSV写定时器（此时已具备患者/设备信息，文件名不会 unknown）
+                startCsvWriteTimers(connection);
+
+                deviceConnections.put(deviceId, connection);
+                return true;
+
+            } catch (IOException e) {
+                log.error("连接设备失败: {}", deviceIp, e);
+                return false;
+            }
+        });
+    }
+
     /**
      * 启动CSV写入定时器 - 参考原始项目的setTimerWIMU和setTimerWGas
      */

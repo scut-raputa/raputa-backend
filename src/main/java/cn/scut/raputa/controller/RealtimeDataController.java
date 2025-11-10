@@ -40,33 +40,66 @@ public class RealtimeDataController {
     // ========== 设备连接管理 ==========
 
     @PostMapping("/connect")
-    @Operation(summary = "连接设备开始接收数据", description = "连接到树莓派设备并开始接收IMU、GAS等传感器数据")
+    @Operation(summary = "连接设备开始接收数据", description = "连接到树莓派设备并开始接收IMU、GAS等传感器数据；会话中登记患者与设备信息用于CSV命名")
     @ApiResponses(value = {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "连接成功"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "请求参数错误"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "500", description = "服务器内部错误")
     })
     public CompletableFuture<ResponseEntity<ApiResponse<Boolean>>> connectDevice(
-            @Parameter(description = "设备IP地址", required = true)
-            @RequestParam String deviceIp,
-            @Parameter(description = "设备ID", required = true)
-            @RequestParam String deviceId) {
-        
-        log.info("开始连接设备: {} ({})", deviceId, deviceIp);
-        
-        return realtimeDataService.startDataReceiving(deviceIp, deviceId)
-                .thenApply(success -> {
-                    if (success) {
-                        return ResponseEntity.ok(ApiResponse.ok(true, "设备连接成功，开始接收数据"));
-                    } else {
-                        return ResponseEntity.ok(ApiResponse.<Boolean>error(500, "设备连接失败"));
-                    }
-                })
+            @io.swagger.v3.oas.annotations.parameters.RequestBody(
+                description = "连接入参：设备信息 + 患者编号/姓名，用于CSV文件命名",
+                required = true
+            )
+            @RequestBody ConnectRequest req) {
+
+        // 基本校验（按需加强）
+        if (req.deviceIp() == null || req.deviceIp().isBlank()
+                || req.deviceId() == null || req.deviceId().isBlank()) {
+            return CompletableFuture.completedFuture(
+                ResponseEntity.ok(ApiResponse.<Boolean>error(400, "deviceIp 和 deviceId 为必填"))
+            );
+        }
+
+        log.info("开始连接设备: {} ({})，设备名: {}，患者: {}-{}",
+                req.deviceId(), req.deviceIp(), req.deviceName(), req.patientId(), req.patientName());
+
+        // 关键：使用带会话元信息的重载，确保 CSV 首次创建就用新命名
+        return realtimeDataService
+                .startDataReceiving(req.deviceIp(),
+                                    req.deviceId(),
+                                    req.deviceName(),
+                                    req.patientId(),
+                                    req.patientName())
+                .thenApply(success -> success
+                        ? ResponseEntity.ok(ApiResponse.ok(true, "设备连接成功，开始接收数据"))
+                        : ResponseEntity.ok(ApiResponse.<Boolean>error(500, "设备连接失败")))
                 .exceptionally(throwable -> {
                     log.error("连接设备异常", throwable);
                     return ResponseEntity.ok(ApiResponse.<Boolean>error(500, "连接设备异常: " + throwable.getMessage()));
                 });
     }
+    // public CompletableFuture<ResponseEntity<ApiResponse<Boolean>>> connectDevice(
+    //         @Parameter(description = "设备IP地址", required = true)
+    //         @RequestParam String deviceIp,
+    //         @Parameter(description = "设备ID", required = true)
+    //         @RequestParam String deviceId) {
+        
+    //     log.info("开始连接设备: {} ({})", deviceId, deviceIp);
+        
+    //     return realtimeDataService.startDataReceiving(deviceIp, deviceId)
+    //             .thenApply(success -> {
+    //                 if (success) {
+    //                     return ResponseEntity.ok(ApiResponse.ok(true, "设备连接成功，开始接收数据"));
+    //                 } else {
+    //                     return ResponseEntity.ok(ApiResponse.<Boolean>error(500, "设备连接失败"));
+    //                 }
+    //             })
+    //             .exceptionally(throwable -> {
+    //                 log.error("连接设备异常", throwable);
+    //                 return ResponseEntity.ok(ApiResponse.<Boolean>error(500, "连接设备异常: " + throwable.getMessage()));
+    //             });
+    // }
 
     @PostMapping("/disconnect")
     @Operation(summary = "断开设备连接", description = "停止接收数据并断开与设备的连接")
@@ -308,5 +341,13 @@ public class RealtimeDataController {
         boolean isConnected,
         boolean isReceiving,
         LocalDateTime lastHeartbeat
+    ) {}
+
+    public record ConnectRequest(
+        String deviceIp,
+        String deviceId,
+        String deviceName,
+        String patientId,
+        String patientName
     ) {}
 }
