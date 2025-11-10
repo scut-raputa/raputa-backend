@@ -56,6 +56,39 @@ public class WebSocketService {
     }
     
     /**
+     * 推送AUDIO数据到指定设备的订阅者(已降采样)
+     * 
+     * @param deviceId 设备ID
+     * @param timestamp 时间戳
+     * @param amplitude 音频幅值
+     */
+    public void pushAudioData(String deviceId, Long timestamp, Float amplitude) {
+        try {
+            RealtimeDataMessage message = RealtimeDataMessage.createAudioMessage(deviceId, timestamp, amplitude);
+            String destination = "/topic/device/" + deviceId + "/audio";
+            messagingTemplate.convertAndSend(destination, message);
+        } catch (Exception e) {
+            log.error("推送AUDIO数据失败: deviceId={}", deviceId, e);
+        }
+    }
+    
+    /**
+     * 推送模型预测结果到前端
+     * 
+     * @param deviceId 设备ID
+     * @param result 预测结果
+     */
+    public void pushPredictionResult(String deviceId, Object result) {
+        try {
+            String destination = "/topic/device/" + deviceId + "/prediction";
+            messagingTemplate.convertAndSend(destination, result);
+            log.info("推送预测结果到设备: {}", deviceId);
+        } catch (Exception e) {
+            log.error("推送预测结果失败: deviceId={}", deviceId, e);
+        }
+    }
+    
+    /**
      * 推送批量IMU数据(用于降低推送频率,避免前端卡顿)
      * 
      * @param deviceId 设备ID
@@ -83,6 +116,9 @@ public class WebSocketService {
         }
     }
 }
+
+
+
 
 
 

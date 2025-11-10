@@ -5,13 +5,19 @@ import cn.scut.raputa.utils.SocketTools;
 import com.fasterxml.jackson.databind.JsonNode;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.bytedeco.ffmpeg.global.avcodec;
+import org.bytedeco.javacv.FFmpegFrameGrabber;
+import org.bytedeco.javacv.FFmpegFrameRecorder;
+import org.bytedeco.javacv.Frame;
 import org.springframework.stereotype.Service;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -34,6 +40,7 @@ public class RealtimeDataService {
 
     private final CsvDataService csvDataService;
     private final WebSocketService webSocketService;
+    private final ModelPredictionService modelPredictionService;
 
     // 设备连接状态管理
     private final ConcurrentHashMap<String, DeviceConnection> deviceConnections = new ConcurrentHashMap<>();
@@ -74,10 +81,49 @@ public class RealtimeDataService {
         // CSV写入定时任务
         private java.util.concurrent.ScheduledFuture<?> imuWriteTask;
         private java.util.concurrent.ScheduledFuture<?> gasWriteTask;
+        
+        // 音频RTSP相关
+        private FFmpegFrameGrabber audioGrabber;
+        private FFmpegFrameRecorder audioRecorder;
+        private Thread audioThread;
+        private final AtomicBoolean audioReceiving = new AtomicBoolean(false);
+        private String deviceIp;
+        private String audioFilePath;
+        private int audioRetryCount = 0; // 音频重试次数
+        private static final int MAX_AUDIO_RETRY = 5; // 最大重试次数
+        private long audioStartTimestamp = 0; // 音频开始时间戳（毫秒）
+        private long audioFrameCount = 0; // 音频帧计数
+        private Frame audioFirstFrame; // 保存第一帧，等待所有数据就绪后再初始化录制器
+        
+        // 数据就绪状态标志 - 三种数据都就绪后才开始保存文件
+        private final AtomicBoolean imuReady = new AtomicBoolean(false);
+        private final AtomicBoolean gasReady = new AtomicBoolean(false);
+        private final AtomicBoolean audioReady = new AtomicBoolean(false);
+        private final AtomicBoolean allDataReady = new AtomicBoolean(false);
+        
+        // 音频数据降采样 - 从48kHz降到200Hz
+        private int audioPushCount = 0;
+        private int audioPushMethodCallCount = 0; // 调用计数器
+        private static final int AUDIO_DOWNSAMPLE_RATIO = 240; // 48000 / 200 = 240
+        
+        // 定时预测任务
+        private java.util.concurrent.ScheduledFuture<?> predictionTask;
+        private long lastPredictionTime = 0; // 上次预测的时间戳
 
         public DeviceConnection(String deviceId) {
             this.deviceId = deviceId;
             this.lastHeartbeat = LocalDateTime.now();
+        }
+        
+        /**
+         * 检查所有数据是否就绪
+         */
+        public boolean checkAllDataReady() {
+            if (!allDataReady.get() && imuReady.get() && gasReady.get() && audioReady.get()) {
+                allDataReady.set(true);
+                return true;
+            }
+            return allDataReady.get();
         }
     }
 
@@ -88,6 +134,7 @@ public class RealtimeDataService {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 DeviceConnection connection = new DeviceConnection(deviceId);
+                connection.deviceIp = deviceIp; // 保存IP用于音频RTSP连接
 
                 // 建立TCP连接
                 Socket socket = new Socket(deviceIp, 6667);
@@ -114,6 +161,12 @@ public class RealtimeDataService {
                 // 启动CSV写入定时器 - 参考原始项目的setTimerWIMU和setTimerWGas
                 startCsvWriteTimers(connection);
                 
+                // 启动音频RTSP接收 - 参考原始项目的WaveFrom.play()
+                startAudioReceiving(connection);
+                
+                // 启动定时预测任务 - 每10秒执行一次
+                startPredictionTimer(connection);
+                
                 deviceConnections.put(deviceId, connection);
                 return true;
                 
@@ -134,6 +187,7 @@ public class RealtimeDataService {
         return CompletableFuture.supplyAsync(() -> {
             try {
                 DeviceConnection connection = new DeviceConnection(deviceId);
+                connection.deviceIp = deviceIp; // 保存IP用于音频RTSP连接
 
                 // 1) 先登记会话元信息（关键：必须在任何写入发生前）
                 csvDataService.setSessionMeta(deviceId, patientId, patientName, deviceName);
@@ -161,6 +215,14 @@ public class RealtimeDataService {
 
                 // 5) 启动CSV写定时器（此时已具备患者/设备信息，文件名不会 unknown）
                 startCsvWriteTimers(connection);
+
+                // 启动音频RTSP接收 - 参考原始项目的WaveFrom.play()
+                startAudioReceiving(connection);
+                
+                // 启动定时预测任务 - 每10秒执行一次
+                startPredictionTimer(connection);
+                
+                
 
                 deviceConnections.put(deviceId, connection);
                 return true;
@@ -208,9 +270,88 @@ public class RealtimeDataService {
     }
     
     /**
+     * 启动定时预测任务 - 每10秒导出数据并调用模型预测
+     */
+    private void startPredictionTimer(DeviceConnection connection) {
+        // 确保之前的任务已取消
+        if (connection.predictionTask != null) {
+            connection.predictionTask.cancel(false);
+        }
+        
+        // 定时预测任务 - 每10秒执行一次，首次15秒后开始（等待数据积累）
+        connection.predictionTask = csvWriteScheduler.scheduleAtFixedRate(() -> {
+            try {
+                // 只有在所有数据就绪后才执行预测
+                if (connection.allDataReady.get()) {
+                    performPrediction(connection);
+                }
+            } catch (Exception e) {
+                log.error("定时预测异常", e);
+            }
+        }, 15, 10, TimeUnit.SECONDS);
+        
+        log.info("启动设备 {} 的定时预测任务（每10秒）", connection.deviceId);
+    }
+    
+    /**
+     * 执行模型预测 - 导出最近10秒的数据并调用模型
+     */
+    private void performPrediction(DeviceConnection connection) {
+        try {
+            long currentTime = System.currentTimeMillis();
+            
+            log.info("开始执行设备 {} 的模型预测", connection.deviceId);
+            
+            // 导出最近10秒的数据段
+            File audioSegment = csvDataService.exportAudioSegment(connection.deviceId, 10);
+            File imuSegment = csvDataService.exportDataSegment(connection.deviceId, "imu", 10);
+            File gasSegment = csvDataService.exportDataSegment(connection.deviceId, "gas", 10);
+            
+            if (audioSegment == null || imuSegment == null || gasSegment == null) {
+                log.warn("设备 {} 数据段导出失败，跳过本次预测", connection.deviceId);
+                return;
+            }
+            
+            // 调用模型预测
+            ModelPredictionService.PredictionResult result = 
+                modelPredictionService.uploadAndPredict(audioSegment, imuSegment, gasSegment);
+            
+            if (result != null) {
+                // 推送结果到前端
+                webSocketService.pushPredictionResult(connection.deviceId, result);
+                
+                // 记录预测时间
+                connection.lastPredictionTime = currentTime;
+                
+                if (result.hasSwallowEvents()) {
+                    log.info("设备 {} 预测成功，检测到 {} 个吴咙事件", 
+                        connection.deviceId, result.getSwallowEvents().size());
+                } else if (result.getMessage() != null) {
+                    log.info("设备 {} 预测结果: {}", connection.deviceId, result.getMessage());
+                }
+            } else {
+                log.error("设备 {} 模型预测失败", connection.deviceId);
+            }
+            
+            // 清理临时文件
+            if (audioSegment != null && audioSegment.exists()) audioSegment.delete();
+            if (imuSegment != null && imuSegment.exists()) imuSegment.delete();
+            if (gasSegment != null && gasSegment.exists()) gasSegment.delete();
+            
+        } catch (Exception e) {
+            log.error("执行预测失败", e);
+        }
+    }
+    
+    /**
      * 写入IMU数据到CSV - 参考原始项目的wIMU方法
      */
     private void writeImuDataToCsv(DeviceConnection connection) {
+        // 检查所有数据是否就绪，未就绪则不保存
+        if (!connection.allDataReady.get()) {
+            return;
+        }
+        
         List<String[]> valList = new ArrayList<>();
         
         // 动态调整处理量 - 参考原项目的动态调整逻辑
@@ -250,6 +391,11 @@ public class RealtimeDataService {
      * 写入GAS数据到CSV - 参考原始项目的wGas方法
      */
     private void writeGasDataToCsv(DeviceConnection connection) {
+        // 检查所有数据是否就绪，未就绪则不保存
+        if (!connection.allDataReady.get()) {
+            return;
+        }
+        
         List<String[]> valList = new ArrayList<>();
         
         // 动态调整处理量
@@ -385,6 +531,15 @@ public class RealtimeDataService {
                         connection.gasWriteTask.cancel(false);
                         log.info("停止设备 {} 的GAS CSV写入定时器", deviceId);
                     }
+                    
+                    // 停止定时预测任务
+                    if (connection.predictionTask != null) {
+                        connection.predictionTask.cancel(false);
+                        log.info("停止设备 {} 的定时预测任务", deviceId);
+                    }
+                    
+                    // 停止音频接收并保存文件
+                    stopAudioReceiving(connection);
                     
                     // 保存剩余缓冲数据（在关闭定时器后）
                     saveRemainingData(connection);
@@ -597,6 +752,13 @@ public class RealtimeDataService {
                     connection.imuFirstData = false;
                     log.info("设备 {} 舍弃首条IMU数据", deviceId);
                 } else {
+                    // 标记IMU数据就绪
+                    if (!connection.imuReady.get()) {
+                        connection.imuReady.set(true);
+                        log.info("设备 {} IMU数据就绪", deviceId);
+                        checkAndStartRecording(connection);
+                    }
+                    
                     // 放入CSV缓冲队列 (所有数据都保存)
                     connection.imuBuffer.put(jsonData);
                     
@@ -619,6 +781,13 @@ public class RealtimeDataService {
                     connection.gasFirstData = false;
                     log.info("设备 {} 舍弃首条GAS数据", deviceId);
                 } else {
+                    // 标记GAS数据就绪
+                    if (!connection.gasReady.get()) {
+                        connection.gasReady.set(true);
+                        log.info("设备 {} GAS数据就绪", deviceId);
+                        checkAndStartRecording(connection);
+                    }
+                    
                     // 放入CSV缓冲队列 (所有数据都保存)
                     connection.gasBuffer.put(jsonData);
                     
@@ -718,6 +887,346 @@ public class RealtimeDataService {
             );
         }
         return new DeviceDataStats(deviceId, 0, 0, 0, 0);
+    }
+    
+    /**
+     * 启动音频RTSP接收 - 参考原始项目的WaveFrom.play()
+     */
+    private void startAudioReceiving(DeviceConnection connection) {
+        connection.audioThread = new Thread(() -> {
+            while (connection.isConnected.get() && connection.audioRetryCount < DeviceConnection.MAX_AUDIO_RETRY) {
+                try {
+                    // 构建RTSP URL
+                    String rtspUrl = "rtsp://" + connection.deviceIp + ":8554/stream/audio";
+                    log.info("开始连接音频RTSP: {} (尝试 {}/{})", rtspUrl, connection.audioRetryCount + 1, DeviceConnection.MAX_AUDIO_RETRY);
+                    
+                    // 创建FFmpeg音频抓取器
+                    connection.audioGrabber = FFmpegFrameGrabber.createDefault(rtspUrl);
+                    connection.audioGrabber.setOption("rtsp_transport", "tcp");
+                    connection.audioGrabber.setTimeout(5000);
+                    connection.audioGrabber.start();
+                    
+                    connection.audioReceiving.set(true);
+                    log.info("音频RTSP连接成功: {}", rtspUrl);
+                    
+                    // 获取第一帧并保存
+                    Frame firstFrame = connection.audioGrabber.grabSamples();
+                    if (firstFrame != null && firstFrame.audioChannels > 0) {
+                        // 保存第一帧，等待所有数据就绪
+                        connection.audioFirstFrame = firstFrame;
+                        
+                        // 标记音频数据就绪
+                        if (!connection.audioReady.get()) {
+                            connection.audioReady.set(true);
+                            log.info("设备 {} 音频数据就绪", connection.deviceId);
+                            checkAndStartRecording(connection);
+                        }
+                        
+                        // 重置重试计数
+                        connection.audioRetryCount = 0;
+                        
+                        // 持续接收音频帧
+                        while (connection.audioReceiving.get() && !Thread.currentThread().isInterrupted()) {
+                            Frame frame = connection.audioGrabber.grabSamples();
+                            if (frame != null && frame.audioChannels > 0) {
+                                // 立即推送到WebSocket（不受录制状态影响）
+                                pushAudioToWebSocket(connection, frame);
+                                // 录制音频帧（仅在所有数据就绪后）
+                                recordAudioFrame(connection, frame);
+                            } else {
+                                log.warn("设备 {} 音频流中断，尝试重连", connection.deviceId);
+                                break;
+                            }
+                        }
+                    }
+                    
+                } catch (Exception e) {
+                    log.error("设备 {} 音频接收异常 (尝试 {}/{}): {}", 
+                            connection.deviceId, connection.audioRetryCount + 1, DeviceConnection.MAX_AUDIO_RETRY, e.getMessage());
+                }
+                
+                // 清理音频资源准备重试
+                cleanupAudioResources(connection);
+                
+                // 如果还在连接状态且未达到最大重试次数，则重试
+                if (connection.isConnected.get() && connection.audioRetryCount < DeviceConnection.MAX_AUDIO_RETRY) {
+                    connection.audioRetryCount++;
+                    try {
+                        log.info("设备 {} 等待0.5秒后重试音频连接...", connection.deviceId);
+                        Thread.sleep(500);
+                    } catch (InterruptedException ie) {
+                        log.info("设备 {} 音频重试被中断", connection.deviceId);
+                        break;
+                    }
+                } else {
+                    break;
+                }
+            }
+            
+            // 达到最大重试次数
+            if (connection.audioRetryCount >= DeviceConnection.MAX_AUDIO_RETRY) {
+                log.error("设备 {} 音频连接失败，已达到最大重试次数 {}", connection.deviceId, DeviceConnection.MAX_AUDIO_RETRY);
+            }
+        });
+        connection.audioThread.setDaemon(true);
+        connection.audioThread.start();
+    }
+    
+    /**
+     * 清理音频资源 - 参考原始项目的stopAndStartWaveGrabber
+     */
+    private void cleanupAudioResources(DeviceConnection connection) {
+        try {
+            connection.audioReceiving.set(false);
+            
+            if (connection.audioRecorder != null) {
+                try {
+                    connection.audioRecorder.release();
+                    connection.audioRecorder.stop();
+                    connection.audioRecorder.close();
+                } catch (Exception e) {
+                    log.warn("关闭音频录制器异常: {}", e.getMessage());
+                }
+                connection.audioRecorder = null;
+            }
+            
+            if (connection.audioGrabber != null) {
+                try {
+                    connection.audioGrabber.release();
+                    connection.audioGrabber.stop();
+                    connection.audioGrabber.close();
+                } catch (Exception e) {
+                    log.warn("关闭音频抓取器异常: {}", e.getMessage());
+                }
+                connection.audioGrabber = null;
+            }
+        } catch (Exception e) {
+            log.error("清理音频资源异常", e);
+        }
+    }
+    
+    /**
+     * 检查并启动录制 - 当三种数据都就绪时
+     */
+    private void checkAndStartRecording(DeviceConnection connection) {
+        if (connection.checkAllDataReady()) {
+            log.info("设备 {} 所有数据就绪 (IMU, GAS, AUDIO)，开始保存文件", connection.deviceId);
+            // 注意：CSV写入定时器已在startCsvWriteTimers中启动，会自动检查allDataReady标志
+            
+            // 立即初始化音频录制器（使用保存的第一帧）
+            if (connection.audioFirstFrame != null && connection.audioRecorder == null) {
+                initAudioRecorder(connection, connection.audioFirstFrame);
+                connection.audioStartTimestamp = System.currentTimeMillis();
+            }
+        }
+    }
+    
+    /**
+     * 初始化音频录制器 - 参考原始项目的setWaveRecorder方法
+     */
+    private void initAudioRecorder(DeviceConnection connection, Frame firstFrame) {
+        try {
+            // 检查是否已经初始化过
+            if (connection.audioRecorder != null) {
+                return;
+            }
+            
+            // 生成文件名: audio.wav （保存到会话文件夹中）
+            String fileName = "audio.wav";
+            
+            // 获取会话文件夹
+            String sessionFolder = csvDataService.getSessionFolder(connection.deviceId);
+            if (sessionFolder == null) {
+                log.error("设备 {} 的会话文件夹不存在，无法保存音频文件", connection.deviceId);
+                return;
+            }
+            File audioFile = new File(sessionFolder, fileName);
+            connection.audioFilePath = audioFile.getAbsolutePath();
+            
+            // 记录原始声道数
+            int originalChannels = connection.audioGrabber.getAudioChannels();
+            int originalSampleRate = connection.audioGrabber.getSampleRate();
+            log.info("设备 {} 音频参数: 采样率={}Hz, 原始声道数={}", 
+                connection.deviceId, originalSampleRate, originalChannels);
+            
+            // 强制使用单声道 - 解决RTSP流双声道但数据不匹配的问题
+            int channelsToUse = 1;
+            
+            // 创建录制器 - 强制使用单声道
+            connection.audioRecorder = new FFmpegFrameRecorder(
+                connection.audioFilePath, 
+                channelsToUse  // 强制单声道
+            );
+            
+            // 设置音频参数 - 参考原始项目
+            connection.audioRecorder.setAudioOption("crf", "0");
+            connection.audioRecorder.setAudioQuality(0);
+            connection.audioRecorder.setAudioChannels(channelsToUse);  // 强制单声道
+            connection.audioRecorder.setSampleRate(originalSampleRate);
+            connection.audioRecorder.setFormat("wav");
+            connection.audioRecorder.setAudioCodec(avcodec.AV_CODEC_ID_PCM_S16LE);
+            
+            // 启动录制器
+            connection.audioRecorder.start();
+            
+            // 录制第一帧
+            connection.audioRecorder.setTimestamp(firstFrame.timestamp);
+            connection.audioRecorder.recordSamples(firstFrame.samples);
+            
+            log.info("设备 {} 音频录制器初始化成功,文件: {}, 输出声道数: {}", 
+                connection.deviceId, fileName, channelsToUse);
+            
+        } catch (Exception e) {
+            log.error("设备 {} 初始化音频录制器失败", connection.deviceId, e);
+        }
+    }
+    
+    /**
+     * 录制音频帧 - 参考原始项目的waveRecorderSt方法
+     */
+    private void recordAudioFrame(DeviceConnection connection, Frame frame) {
+        try {
+            // 仅在所有数据就绪后才录制
+            if (!connection.allDataReady.get()) {
+                return;
+            }
+            
+            // 如果录制器还未初始化（所有数据刚就绪），先初始化
+            if (connection.audioRecorder == null && connection.audioFirstFrame != null) {
+                initAudioRecorder(connection, connection.audioFirstFrame);
+                connection.audioStartTimestamp = System.currentTimeMillis();
+            }
+            
+            if (connection.audioRecorder != null) {
+                synchronized (connection.audioRecorder) {
+                    connection.audioRecorder.setTimestamp(frame.timestamp);
+                    connection.audioRecorder.recordSamples(frame.samples);
+                    connection.audioFrameCount++;
+                }
+            }
+        } catch (Exception e) {
+            log.error("设备 {} 录制音频帧失败", connection.deviceId, e);
+        }
+    }
+    
+    /**
+     * 提取音频数据并降采样推送到WebSocket
+     */
+    private void pushAudioToWebSocket(DeviceConnection connection, Frame frame) {
+        try {
+            if (frame.samples == null || frame.samples.length == 0) {
+                return;
+            }
+            
+            connection.audioPushMethodCallCount++;
+            
+            // 获取第一个声道的数据
+            java.nio.Buffer buffer = frame.samples[0];
+            
+            // 支持ShortBuffer和FloatBuffer两种类型
+            if (buffer instanceof java.nio.ShortBuffer) {
+                // ShortBuffer类型 - 转换为浮点数
+                java.nio.ShortBuffer shortBuffer = (java.nio.ShortBuffer) buffer;
+                int capacity = shortBuffer.capacity();
+                
+                // 降采样：每 AUDIO_DOWNSAMPLE_RATIO 个样本取一个
+                for (int i = 0; i < capacity; i++) {
+                    connection.audioPushCount++;
+                    if (connection.audioPushCount % DeviceConnection.AUDIO_DOWNSAMPLE_RATIO == 0) {
+                        // Short值范围是-32768到32767，转换为-1.0到1.0的浮点数
+                        short shortValue = shortBuffer.get(i);
+                        float amplitude = shortValue / 32768.0f;
+                        long timestamp = System.currentTimeMillis();
+                        webSocketService.pushAudioData(connection.deviceId, timestamp, amplitude);
+                    }
+                }
+            } else if (buffer instanceof java.nio.FloatBuffer) {
+                // FloatBuffer类型
+                java.nio.FloatBuffer floatBuffer = (java.nio.FloatBuffer) buffer;
+                int capacity = floatBuffer.capacity();
+                
+                // 降采样：每 AUDIO_DOWNSAMPLE_RATIO 个样本取一个
+                for (int i = 0; i < capacity; i++) {
+                    connection.audioPushCount++;
+                    if (connection.audioPushCount % DeviceConnection.AUDIO_DOWNSAMPLE_RATIO == 0) {
+                        float amplitude = floatBuffer.get(i);
+                        long timestamp = System.currentTimeMillis();
+                        webSocketService.pushAudioData(connection.deviceId, timestamp, amplitude);
+                    }
+                }
+            } else {
+                log.warn("[音频推送] 设备 {} 音频数据类型不支持，实际类型: {}", 
+                    connection.deviceId, buffer.getClass().getName());
+                return;
+            }
+            
+        } catch (Exception e) {
+            log.error("设备 {} 推送音频数据到WebSocket失败", connection.deviceId, e);
+        }
+    }
+    
+    /**
+     * 停止音频接收并保存文件 - 参考原始项目的playStop方法
+     */
+    private void stopAudioReceiving(DeviceConnection connection) {
+        try {
+            connection.audioReceiving.set(false);
+            
+            // 等待一小段时间确保最后的数据被处理
+            Thread.sleep(500);
+            
+            // 计算音频时长（在关闭录制器之前）
+            long audioEndTimestamp = System.currentTimeMillis();
+            double audioDurationSeconds = 0.0;
+            
+            if (connection.audioStartTimestamp > 0) {
+                long durationMs = audioEndTimestamp - connection.audioStartTimestamp;
+                audioDurationSeconds = durationMs / 1000.0;
+            }
+            
+            // 关闭录制器
+            if (connection.audioRecorder != null) {
+                synchronized (connection.audioRecorder) {
+                    connection.audioRecorder.release();
+                    connection.audioRecorder.stop();
+                    connection.audioRecorder.close();
+                    connection.audioRecorder = null;
+                }
+            }
+            
+            // 输出详细信息（无论录制器是否存在）
+            log.info("========================================");
+            log.info("设备 {} 音频文件已保存: {}", connection.deviceId, connection.audioFilePath);
+            log.info("音频时长: {} 秒", String.format("%.2f", audioDurationSeconds));
+            log.info("音频帧数: {} 帧", connection.audioFrameCount);
+            if (connection.audioGrabber != null) {
+                try {
+                    log.info("音频采样率: {} Hz", connection.audioGrabber.getSampleRate());
+                    log.info("音频声道数: {}", connection.audioGrabber.getAudioChannels());
+                } catch (Exception e) {
+                    log.warn("获取音频参数失败: {}", e.getMessage());
+                }
+            }
+            log.info("========================================");
+            
+            // 关闭抓取器
+            if (connection.audioGrabber != null) {
+                connection.audioGrabber.release();
+                connection.audioGrabber.stop();
+                connection.audioGrabber.close();
+                connection.audioGrabber = null;
+            }
+            
+            // 中断音频线程
+            if (connection.audioThread != null) {
+                connection.audioThread.interrupt();
+            }
+            
+            log.info("设备 {} 音频接收已停止", connection.deviceId);
+            
+        } catch (Exception e) {
+            log.error("设备 {} 停止音频接收失败", connection.deviceId, e);
+        }
     }
     
     /**

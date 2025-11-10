@@ -51,6 +51,11 @@ public class RealtimeDataMessage {
     private Integer flow;
     
     /**
+     * AUDIO数据 - 音频幅值(降采样后)
+     */
+    private Float amplitude;
+    
+    /**
      * 创建IMU数据消息
      */
     public static RealtimeDataMessage createImuMessage(String deviceId, Long timestamp, Integer x, Integer y, Integer z) {
@@ -75,7 +80,22 @@ public class RealtimeDataMessage {
         message.setFlow(flow);
         return message;
     }
+    
+    /**
+     * 创建AUDIO数据消息
+     */
+    public static RealtimeDataMessage createAudioMessage(String deviceId, Long timestamp, Float amplitude) {
+        RealtimeDataMessage message = new RealtimeDataMessage();
+        message.setDeviceId(deviceId);
+        message.setDataType("audio");
+        message.setTimestamp(timestamp);
+        message.setAmplitude(amplitude);
+        return message;
+    }
 }
+
+
+
 
 
 
