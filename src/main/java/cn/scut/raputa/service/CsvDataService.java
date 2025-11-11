@@ -367,11 +367,11 @@ public class CsvDataService {
     /**
      * 导出最近N秒的音频数据段
      * 注意：音频文件是WAV格式，需要特殊处理
-     * 这里我们直接复制整个WAV文件，因为裁剪WAV需要处理头信息
+     * 为避免文件锁冲突，创建临时副本而不是直接使用原文件
      * 
      * @param deviceId 设备ID
      * @param seconds 时长(秒) - 暂时忽略，返回整个文件
-     * @return 音频WAV文件
+     * @return 音频WAV文件（临时副本）
      */
     public File exportAudioSegment(String deviceId, int seconds) {
         try {
@@ -381,17 +381,22 @@ public class CsvDataService {
                 return null;
             }
             
-            // 直接使用会话文件夹中的audio.wav
+            // 原始音频文件
             Path audioPath = Paths.get(sessionFolder, "audio.wav");
             if (!Files.exists(audioPath)) {
                 log.warn("设备 {} 的音频文件不存在: {}", deviceId, audioPath);
                 return null;
             }
             
-            // TODO: 如果需要裁剪最近N秒，需要使用JavaCV进行音频处理
-            // 目前直接返回整个文件
-            log.info("使用音频文件: {}", audioPath);
-            return audioPath.toFile();
+            // 创建临时副本，避免文件锁冲突
+            String tempFileName = String.format("audio_segment_%d.wav", System.currentTimeMillis());
+            Path tempPath = Paths.get(sessionFolder, tempFileName);
+            
+            // 复制文件（使用 Files.copy 而不是直接读写，更安全）
+            Files.copy(audioPath, tempPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+            
+            log.info("创建音频临时副本: {} (大小: {} bytes)", tempFileName, Files.size(tempPath));
+            return tempPath.toFile();
             
         } catch (Exception e) {
             log.error("导出音频数据段失败", e);

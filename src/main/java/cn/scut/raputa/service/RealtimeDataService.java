@@ -288,7 +288,7 @@ public class RealtimeDataService {
             } catch (Exception e) {
                 log.error("定时预测异常", e);
             }
-        }, 15, 10, TimeUnit.SECONDS);
+        }, 7, 5, TimeUnit.SECONDS);
         
         log.info("启动设备 {} 的定时预测任务（每10秒）", connection.deviceId);
     }
@@ -303,9 +303,9 @@ public class RealtimeDataService {
             log.info("开始执行设备 {} 的模型预测", connection.deviceId);
             
             // 导出最近10秒的数据段
-            File audioSegment = csvDataService.exportAudioSegment(connection.deviceId, 10);
-            File imuSegment = csvDataService.exportDataSegment(connection.deviceId, "imu", 10);
-            File gasSegment = csvDataService.exportDataSegment(connection.deviceId, "gas", 10);
+            File audioSegment = csvDataService.exportAudioSegment(connection.deviceId, 5);
+            File imuSegment = csvDataService.exportDataSegment(connection.deviceId, "imu", 5);
+            File gasSegment = csvDataService.exportDataSegment(connection.deviceId, "gas", 5);
             
             if (audioSegment == null || imuSegment == null || gasSegment == null) {
                 log.warn("设备 {} 数据段导出失败，跳过本次预测", connection.deviceId);
@@ -360,10 +360,10 @@ public class RealtimeDataService {
         
         // 如果积压严重,增加单次处理量
         if (bufferSize > 2000) {
-            lsize = 600; // 增加到 600 条
+            lsize = 1500; // 增加到 600 条
             log.warn("设备 {} IMU缓冲区严重积压: {} 条数据,增加处理量", connection.deviceId, bufferSize);
         } else if (bufferSize > 1500) {
-            lsize = 500; // 增加到 500 条
+            lsize = 1000; // 增加到 500 条
         }
         
         for (int i = 0; i < lsize; i++) {
@@ -893,8 +893,11 @@ public class RealtimeDataService {
      * 启动音频RTSP接收 - 参考原始项目的WaveFrom.play()
      */
     private void startAudioReceiving(DeviceConnection connection) {
+        log.info("设备 {} 开始启动音频接收线程...", connection.deviceId);
+        
         connection.audioThread = new Thread(() -> {
             while (connection.isConnected.get() && connection.audioRetryCount < DeviceConnection.MAX_AUDIO_RETRY) {
+                boolean shouldRetry = false; // 标记是否需要重试
                 try {
                     // 构建RTSP URL
                     String rtspUrl = "rtsp://" + connection.deviceIp + ":8554/stream/audio";
@@ -914,6 +917,8 @@ public class RealtimeDataService {
                     if (firstFrame != null && firstFrame.audioChannels > 0) {
                         // 保存第一帧，等待所有数据就绪
                         connection.audioFirstFrame = firstFrame;
+                        log.info("设备 {} 音频第一帧已抓取 (声道={}, 采样={}/s)", 
+                            connection.deviceId, firstFrame.audioChannels, connection.audioGrabber.getSampleRate());
                         
                         // 标记音频数据就绪
                         if (!connection.audioReady.get()) {
@@ -934,31 +939,48 @@ public class RealtimeDataService {
                                 // 录制音频帧（仅在所有数据就绪后）
                                 recordAudioFrame(connection, frame);
                             } else {
-                                log.warn("设备 {} 音频流中断，尝试重连", connection.deviceId);
+                                // 检查是否是因为用户主动停止
+                                if (connection.audioReceiving.get() && connection.isConnected.get()) {
+                                    log.warn("设备 {} 音频流中断，尝试重连", connection.deviceId);
+                                    shouldRetry = true;
+                                } else {
+                                    log.info("设备 {} 音频接收正常停止", connection.deviceId);
+                                }
                                 break;
                             }
                         }
+                    } else {
+                        log.warn("设备 {} 未能抓取到有效的音频第一帧", connection.deviceId);
+                        shouldRetry = true; // 第一帧失败，需要重试
                     }
                     
                 } catch (Exception e) {
                     log.error("设备 {} 音频接收异常 (尝试 {}/{}): {}", 
                             connection.deviceId, connection.audioRetryCount + 1, DeviceConnection.MAX_AUDIO_RETRY, e.getMessage());
+                    shouldRetry = true; // 异常情况，需要重试
                 }
                 
-                // 清理音频资源准备重试
-                cleanupAudioResources(connection);
-                
-                // 如果还在连接状态且未达到最大重试次数，则重试
-                if (connection.isConnected.get() && connection.audioRetryCount < DeviceConnection.MAX_AUDIO_RETRY) {
-                    connection.audioRetryCount++;
-                    try {
-                        log.info("设备 {} 等待0.5秒后重试音频连接...", connection.deviceId);
-                        Thread.sleep(500);
-                    } catch (InterruptedException ie) {
-                        log.info("设备 {} 音频重试被中断", connection.deviceId);
+                // 只有在需要重试时才清理资源
+                if (shouldRetry && connection.isConnected.get()) {
+                    log.debug("设备 {} 准备重试，清理音频资源", connection.deviceId);
+                    cleanupAudioResources(connection);
+                    
+                    // 如果还在连接状态且未达到最大重试次数，则重试
+                    if (connection.audioRetryCount < DeviceConnection.MAX_AUDIO_RETRY) {
+                        connection.audioRetryCount++;
+                        try {
+                            log.info("设备 {} 等待0.5秒后重试音频连接...", connection.deviceId);
+                            Thread.sleep(500);
+                        } catch (InterruptedException ie) {
+                            log.info("设备 {} 音频重试被中断", connection.deviceId);
+                            break;
+                        }
+                    } else {
                         break;
                     }
                 } else {
+                    // 正常停止或用户主动停止，不清理资源，保留录制器用于后续保存
+                    log.debug("设备 {} 音频接收循环退出（不清理资源）", connection.deviceId);
                     break;
                 }
             }
@@ -970,26 +992,19 @@ public class RealtimeDataService {
         });
         connection.audioThread.setDaemon(true);
         connection.audioThread.start();
+        
+        log.info("设备 {} 音频接收线程已启动", connection.deviceId);
     }
     
     /**
      * 清理音频资源 - 参考原始项目的stopAndStartWaveGrabber
+     * 注意: 这个方法用于重试连接时清理，不保存文件
      */
     private void cleanupAudioResources(DeviceConnection connection) {
         try {
             connection.audioReceiving.set(false);
             
-            if (connection.audioRecorder != null) {
-                try {
-                    connection.audioRecorder.release();
-                    connection.audioRecorder.stop();
-                    connection.audioRecorder.close();
-                } catch (Exception e) {
-                    log.warn("关闭音频录制器异常: {}", e.getMessage());
-                }
-                connection.audioRecorder = null;
-            }
-            
+            // 先关闭抓取器（停止接收新数据）
             if (connection.audioGrabber != null) {
                 try {
                     connection.audioGrabber.release();
@@ -1000,6 +1015,23 @@ public class RealtimeDataService {
                 }
                 connection.audioGrabber = null;
             }
+            
+            // 关闭录制器（丢弃未保存的数据）
+            if (connection.audioRecorder != null) {
+                synchronized (connection.audioRecorder) {
+                    try {
+                        connection.audioRecorder.release();
+                        connection.audioRecorder.stop();
+                        connection.audioRecorder.close();
+                    } catch (Exception e) {
+                        log.warn("关闭音频录制器异常: {}", e.getMessage());
+                    }
+                    connection.audioRecorder = null;
+                }
+            }
+            
+            log.debug("设备 {} 音频资源已清理（准备重试）", connection.deviceId);
+            
         } catch (Exception e) {
             log.error("清理音频资源异常", e);
         }
@@ -1097,15 +1129,24 @@ public class RealtimeDataService {
                 connection.audioStartTimestamp = System.currentTimeMillis();
             }
             
+            // 检查是否还在接收状态（避免停止后继续写入）
+            if (!connection.audioReceiving.get()) {
+                return;
+            }
+            
             if (connection.audioRecorder != null) {
                 synchronized (connection.audioRecorder) {
-                    connection.audioRecorder.setTimestamp(frame.timestamp);
-                    connection.audioRecorder.recordSamples(frame.samples);
-                    connection.audioFrameCount++;
+                    // 再次检查，防止在等待锁期间被关闭
+                    if (connection.audioRecorder != null && connection.audioReceiving.get()) {
+                        connection.audioRecorder.setTimestamp(frame.timestamp);
+                        connection.audioRecorder.recordSamples(frame.samples);
+                        connection.audioFrameCount++;
+                    }
                 }
             }
         } catch (Exception e) {
-            log.error("设备 {} 录制音频帧失败", connection.deviceId, e);
+            // 不输出完整堆栈，避免日志滥满
+            log.warn("设备 {} 录制音频帧失败: {}", connection.deviceId, e.getMessage());
         }
     }
     
@@ -1170,59 +1211,153 @@ public class RealtimeDataService {
      */
     private void stopAudioReceiving(DeviceConnection connection) {
         try {
+            log.info("开始停止设备 {} 的音频接收...", connection.deviceId);
+            
+            // 1. 先标记停止接收，让音频线程停止抓取新帧
             connection.audioReceiving.set(false);
             
-            // 等待一小段时间确保最后的数据被处理
+            // 2. 中断音频线程，停止帧抓取循环
+            if (connection.audioThread != null) {
+                connection.audioThread.interrupt();
+                try {
+                    // 等待音频线程结束（最多2秒）
+                    connection.audioThread.join(2000);
+                    if (connection.audioThread.isAlive()) {
+                        log.warn("设备 {} 音频线程未能在2秒内结束", connection.deviceId);
+                    }
+                } catch (InterruptedException ie) {
+                    log.warn("等待音频线程结束时被中断");
+                    Thread.currentThread().interrupt();
+                }
+            }
+            
+            // 3. 等待一小段时间确保最后的数据被处理完毕
             Thread.sleep(500);
             
-            // 计算音频时长（在关闭录制器之前）
+            // 4. 计算音频时长（在关闭录制器之前）
             long audioEndTimestamp = System.currentTimeMillis();
             double audioDurationSeconds = 0.0;
-            
             if (connection.audioStartTimestamp > 0) {
                 long durationMs = audioEndTimestamp - connection.audioStartTimestamp;
                 audioDurationSeconds = durationMs / 1000.0;
             }
             
-            // 关闭录制器
+            // 5. 安全关闭录制器（确保数据刷新到磁盘）
+            boolean hasRecorder = connection.audioRecorder != null;
+            String audioFilePath = connection.audioFilePath; // 保存路径，防止被清空
             if (connection.audioRecorder != null) {
                 synchronized (connection.audioRecorder) {
-                    connection.audioRecorder.release();
-                    connection.audioRecorder.stop();
-                    connection.audioRecorder.close();
-                    connection.audioRecorder = null;
+                    try {
+                        // 正确的关闭顺序：stop() -> release() -> close()
+                        // stop() 停止编码并写入文件尾
+                        connection.audioRecorder.stop();
+                        log.debug("设备 {} 音频录制器已停止", connection.deviceId);
+                        
+                        // release() 释放编码器资源
+                        connection.audioRecorder.release();
+                        log.debug("设备 {} 音频录制器已释放", connection.deviceId);
+                        
+                        // close() 关闭文件句柄
+                        connection.audioRecorder.close();
+                        log.debug("设备 {} 音频录制器已关闭", connection.deviceId);
+                        
+                        connection.audioRecorder = null;
+                    } catch (Exception e) {
+                        log.error("设备 {} 关闭音频录制器时出错: {}", connection.deviceId, e.getMessage(), e);
+                    }
                 }
             }
             
-            // 输出详细信息（无论录制器是否存在）
-            log.info("========================================");
-            log.info("设备 {} 音频文件已保存: {}", connection.deviceId, connection.audioFilePath);
-            log.info("音频时长: {} 秒", String.format("%.2f", audioDurationSeconds));
-            log.info("音频帧数: {} 帧", connection.audioFrameCount);
+            // 等待文件系统刷新（特别重要！）
+            Thread.sleep(200);
+            
+            // 6. 关闭抓取器
             if (connection.audioGrabber != null) {
                 try {
-                    log.info("音频采样率: {} Hz", connection.audioGrabber.getSampleRate());
-                    log.info("音频声道数: {}", connection.audioGrabber.getAudioChannels());
+                    connection.audioGrabber.release();
+                    connection.audioGrabber.stop();
+                    connection.audioGrabber.close();
+                    connection.audioGrabber = null;
+                    log.debug("设备 {} 音频抓取器已关闭", connection.deviceId);
                 } catch (Exception e) {
-                    log.warn("获取音频参数失败: {}", e.getMessage());
+                    log.error("设备 {} 关闭音频抓取器时出错: {}", connection.deviceId, e.getMessage());
+                }
+            }
+            
+            // 7. 输出详细信息
+            log.info("========================================");
+            File finalAudioFile = null; // 保存文件对象用于最终验证
+            if (hasRecorder && audioFilePath != null) {
+                // 检查文件是否存在并获取大小
+                File audioFile = new File(audioFilePath);
+                finalAudioFile = audioFile; // 保存引用
+                if (audioFile.exists()) {
+                    long fileSize = audioFile.length();
+                    log.info("设备 {} 音频文件已保存: {}", connection.deviceId, audioFilePath);
+                    log.info("音频文件大小: {} KB ({} bytes)", fileSize / 1024, fileSize);
+                    log.info("音频时长: {} 秒", String.format("%.2f", audioDurationSeconds));
+                    log.info("音频帧数: {} 帧", connection.audioFrameCount);
+                    
+                    // 再次验证文件是否真的存在且可读
+                    if (!audioFile.canRead()) {
+                        log.error("警告：音频文件存在但不可读！路径: {}", audioFilePath);
+                    }
+                } else {
+                    log.error("设备 {} 音频文件未找到: {}", connection.deviceId, audioFilePath);
+                    // 列出目录中的文件，帮助诊断
+                    File parentDir = audioFile.getParentFile();
+                    if (parentDir != null && parentDir.exists()) {
+                        String[] files = parentDir.list();
+                        if (files != null) {
+                            log.error("会话目录中的文件: {}", String.join(", ", files));
+                        }
+                    }
+                }
+            } else {
+                log.warn("设备 {} 音频录制器未初始化，没有保存音频文件", connection.deviceId);
+                // 详细诊断原因
+                log.warn("数据就绪状态: IMU={}, GAS={}, AUDIO={}, 全部就绪={}", 
+                    connection.imuReady.get(), 
+                    connection.gasReady.get(), 
+                    connection.audioReady.get(),
+                    connection.allDataReady.get());
+                
+                if (connection.audioRetryCount >= DeviceConnection.MAX_AUDIO_RETRY) {
+                    log.warn("原因: 音频连接失败次数超过最大重试次数 {}", DeviceConnection.MAX_AUDIO_RETRY);
+                } else if (!connection.audioReady.get()) {
+                    log.warn("原因: 音频数据未就绪 - 可能是RTSP连接失败或未抓取到音频帧");
+                } else if (!connection.allDataReady.get()) {
+                    log.warn("原因: 其他数据未就绪，未触发录制器初始化");
+                } else if (connection.audioFirstFrame == null) {
+                    log.warn("原因: 音频第一帧未保存");
                 }
             }
             log.info("========================================");
             
-            // 关闭抓取器
-            if (connection.audioGrabber != null) {
-                connection.audioGrabber.release();
-                connection.audioGrabber.stop();
-                connection.audioGrabber.close();
-                connection.audioGrabber = null;
-            }
-            
-            // 中断音频线程
-            if (connection.audioThread != null) {
-                connection.audioThread.interrupt();
-            }
-            
             log.info("设备 {} 音频接收已停止", connection.deviceId);
+            
+            // 最终验证：在方法结束前再次检查文件是否还在
+            if (finalAudioFile != null) {
+                try {
+                    Thread.sleep(100); // 等待一小段时间
+                    if (finalAudioFile.exists()) {
+                        log.info("[最终验证] 音频文件仍然存在: {} (大小: {} bytes)", 
+                            finalAudioFile.getAbsolutePath(), finalAudioFile.length());
+                    } else {
+                        log.error("[最终验证] 警告！音频文件已消失: {}", finalAudioFile.getAbsolutePath());
+                        // 列出目录内容
+                        File parentDir = finalAudioFile.getParentFile();
+                        if (parentDir != null && parentDir.exists()) {
+                            String[] files = parentDir.list();
+                            if (files != null) {
+                                log.error("[最终验证] 会话目录中的文件: {}", String.join(", ", files));
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    log.error("[最终验证] 检查文件时出错", e);
+                }
+            }
             
         } catch (Exception e) {
             log.error("设备 {} 停止音频接收失败", connection.deviceId, e);
