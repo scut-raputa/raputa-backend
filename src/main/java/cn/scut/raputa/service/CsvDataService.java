@@ -1,6 +1,8 @@
 package cn.scut.raputa.service;
 
 import com.opencsv.CSVWriter;
+
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -24,7 +26,10 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Service
 @Slf4j
+@RequiredArgsConstructor
 public class CsvDataService {
+
+    private final PatientFileService patientFileService;
     
     private static final String CSV_DIRECTORY = "D:/health_plat_bk/data";
     private static final DateTimeFormatter FILE_NAME_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
@@ -105,6 +110,8 @@ public class CsvDataService {
                     if (Files.size(filePath) == 0) {
                         csvWriter.writeNext(new String[]{"time", "X", "Y", "Z"});
                         csvWriter.flush();
+                        String patientId = sessionPatientIds.getOrDefault(deviceId, "unknown");
+                        patientFileService.record(patientId, filePath.toAbsolutePath().toString(), "csv", LocalDateTime.now());
                     }
                     log.info("创建新的IMU CSV文件: {}", filePath);
                     return csvWriter;
@@ -149,6 +156,8 @@ public class CsvDataService {
                     if (Files.size(filePath) == 0) {
                         csvWriter.writeNext(new String[]{"time", "value"});
                         csvWriter.flush();
+                        String patientId = sessionPatientIds.getOrDefault(deviceId, "unknown");
+                        patientFileService.record(patientId, filePath.toAbsolutePath().toString(), "csv", LocalDateTime.now());
                     }
                     log.info("创建新的GAS CSV文件: {}", filePath);
                     return csvWriter;
@@ -206,29 +215,66 @@ public class CsvDataService {
     /**
      * 关闭指定设备的CSV写入器
      */
-    public void closeWriter(String deviceId) {
+    // public void closeWriter(String deviceId) {
+    //     try {
+    //         CSVWriter imuWriter = imuWriters.remove(deviceId);
+    //         if (imuWriter != null) {
+    //             imuWriter.close();
+    //             log.info("关闭设备 {} 的IMU CSV写入器", deviceId);
+    //         }
+            
+    //         CSVWriter gasWriter = gasWriters.remove(deviceId);
+    //         if (gasWriter != null) {
+    //             gasWriter.close();
+    //             log.info("关闭设备 {} 的GAS CSV写入器", deviceId);
+    //         }
+            
+    //         // 清理会话元信息
+    //         String sessionFolder = sessionFolders.remove(deviceId);
+    //         sessionPatientIds.remove(deviceId);
+    //         sessionPatientNames.remove(deviceId);
+    //         sessionDeviceNames.remove(deviceId);
+            
+    //         if (sessionFolder != null) {
+    //             log.info("设备 {} 会话文件已保存到: {}", deviceId, sessionFolder);
+    //         }
+    //     } catch (IOException e) {
+    //         log.error("关闭CSV写入器失败: {}", deviceId, e);
+    //     }
+    // }
+        public void closeWriter(String deviceId) {
         try {
             CSVWriter imuWriter = imuWriters.remove(deviceId);
             if (imuWriter != null) {
                 imuWriter.close();
                 log.info("关闭设备 {} 的IMU CSV写入器", deviceId);
             }
-            
+
             CSVWriter gasWriter = gasWriters.remove(deviceId);
             if (gasWriter != null) {
                 gasWriter.close();
                 log.info("关闭设备 {} 的GAS CSV写入器", deviceId);
             }
-            
-            // 清理会话元信息
-            String sessionFolder = sessionFolders.remove(deviceId);
+
+            String sessionFolder = sessionFolders.get(deviceId);
+            String patientId = sessionPatientIds.getOrDefault(deviceId, "unknown");
+
+            // 👉 如果会话目录里存在 audio.wav，则登记到DB
+            if (sessionFolder != null) {
+                Path audio = Paths.get(sessionFolder, "audio.wav");
+                if (Files.exists(audio)) {
+                    patientFileService.record(patientId, audio.toAbsolutePath().toString(), "wav", LocalDateTime.now());
+                    log.info("登记音频文件: {}", audio);
+                }
+                log.info("设备 {} 会话文件已保存到: {}", deviceId, sessionFolder);
+            }
+
+            // 清理元信息
+            sessionFolders.remove(deviceId);
             sessionPatientIds.remove(deviceId);
             sessionPatientNames.remove(deviceId);
             sessionDeviceNames.remove(deviceId);
-            
-            if (sessionFolder != null) {
-                log.info("设备 {} 会话文件已保存到: {}", deviceId, sessionFolder);
-            }
+
         } catch (IOException e) {
             log.error("关闭CSV写入器失败: {}", deviceId, e);
         }
