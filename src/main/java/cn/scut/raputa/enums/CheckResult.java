@@ -2,29 +2,31 @@ package cn.scut.raputa.enums;
 
 public enum CheckResult {
     DYSPHAGIA("吞咽障碍"),
-    EXPLICIT_ASPIRATION("显性误吸"),
-    SILENT_ASPIRATION("隐性误吸"),
+    ASPIRATION("误吸"),
     NORMAL("正常");
 
     private final String label;
 
-    CheckResult(String label) {
-        this.label = label;
-    }
+    CheckResult(String label) { this.label = label; }
 
-    public String getLabel() {
-        return label;
-    }
+    public String getLabel() { return label; }
 
     public static CheckResult fromLabel(String label) {
-        for (CheckResult cr : values()) {
-            if (cr.label.equals(label))
-                return cr;
+        if (label == null) return null;
+        switch (label.trim()) {
+            case "误吸":
+            case "显性误吸":
+            case "隐性误吸":
+                return ASPIRATION;
+            case "吞咽障碍":
+                return DYSPHAGIA;
+            case "正常":
+                return NORMAL;
         }
         try {
-            return CheckResult.valueOf(label);
+            return CheckResult.valueOf(label.trim().toUpperCase());
         } catch (Exception ignored) {
+            return null;
         }
-        return null;
     }
 }

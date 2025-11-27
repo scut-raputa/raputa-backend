@@ -59,10 +59,13 @@ public class PatientServiceImpl implements PatientService {
         LocalDate today = LocalDate.now();
         String datePart = today.format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
         long seq = patientRepository.countByAdmit(today) + 1;
+
         String genId = "P" + datePart + String.format("%05d", seq);
+        String outpatientId = "O" + datePart + String.format("%05d", seq);
 
         Patient p = new Patient();
         p.setId(genId);
+        p.setOutpatientId(outpatientId);
         p.setName(dto.getName().trim());
         p.setGender(dto.getGender());
         p.setBirth(dto.getBirth());
@@ -117,12 +120,20 @@ public class PatientServiceImpl implements PatientService {
     }
 
     public Patient save(Patient p) {
+        LocalDate today = LocalDate.now();
+        String datePart = today.format(DateTimeFormatter.ofPattern("yyyyMMdd"));
+        long countToday = patientRepository.countByAdmit(today) + 1;
+
         if (p.getId() == null || p.getId().isBlank()) {
-            String datePart = LocalDate.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
-            long countToday = patientRepository.countByAdmit(LocalDate.now());
-            String id = "P" + datePart + String.format("%05d", countToday + 1);
+            String id = "P" + datePart + String.format("%05d", countToday);
             p.setId(id);
         }
+
+        if (p.getOutpatientId() == null || p.getOutpatientId().isBlank()) {
+            String outpatientId = "M" + datePart + String.format("%05d", countToday);
+            p.setOutpatientId(outpatientId);
+        }
+
         return patientRepository.save(p);
     }
 }

@@ -47,6 +47,7 @@ public final class VoMappers {
         }
         return PatientVO.builder()
                 .id(p.getId())
+                .outpatientId(p.getOutpatientId())
                 .name(p.getName())
                 .gender(p.getGender())
                 .age(age)

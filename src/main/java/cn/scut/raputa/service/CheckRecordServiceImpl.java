@@ -1,5 +1,6 @@
 package cn.scut.raputa.service;
 
+import cn.scut.raputa.dto.CheckRecordDTO;
 import cn.scut.raputa.entity.CheckRecord;
 import cn.scut.raputa.enums.CheckResult;
 import cn.scut.raputa.repository.CheckRecordRepository;
@@ -11,6 +12,9 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 
 import java.time.*;
+import java.time.format.DateTimeParseException;
+import java.util.ArrayList;
+import java.util.List;
 
 @Service
 @RequiredArgsConstructor
@@ -37,6 +41,58 @@ public class CheckRecordServiceImpl implements CheckRecordService {
                                 Sort.Order.desc("checkTime"),
                                 Sort.Order.desc("rid"))));
         return pg.map(VoMappers::toCheckVO);
+    }
+
+    @Override
+    public CheckRecordVO create(CheckRecordDTO dto) {
+        CheckRecord entity = mapDtoToEntity(dto);
+        entity = checkRecordRepository.save(entity);
+        return VoMappers.toCheckVO(entity);
+    }
+
+    @Override
+    public List<CheckRecordVO> createBatch(List<CheckRecordDTO> dtos) {
+        List<CheckRecord> list = new ArrayList<>();
+        for (CheckRecordDTO dto : dtos) {
+            list.add(mapDtoToEntity(dto));
+        }
+        List<CheckRecord> saved = checkRecordRepository.saveAll(list);
+        return saved.stream().map(VoMappers::toCheckVO).toList();
+    }
+
+    private CheckRecord mapDtoToEntity(CheckRecordDTO dto) {
+        if (dto == null) throw new IllegalArgumentException("payload cannot be null");
+        if (isBlank(dto.getPatientId()) || isBlank(dto.getName()) || isBlank(dto.getStaff()))
+            throw new IllegalArgumentException("patientId/name/staff are required");
+        if (isBlank(dto.getResult()))
+            throw new IllegalArgumentException("result is required");
+
+        CheckResult cr = CheckResult.fromLabel(dto.getResult());
+        if (cr == null)
+            throw new IllegalArgumentException("invalid result: " + dto.getResult());
+
+        CheckRecord e = new CheckRecord();
+        e.setPatientId(dto.getPatientId());
+        e.setName(dto.getName());
+        e.setStaff(dto.getStaff());
+        e.setResult(cr);
+
+        if (isBlank(dto.getCheckTime())) {
+            e.setCheckTime(LocalDateTime.now(CheckRecord.ZONE_CN));
+        } else {
+            try {
+                // 解析 ISO-8601，本地时间；如果传的是 UTC 带 Z，可先 OffsetDateTime->LocalDateTime
+                e.setCheckTime(LocalDateTime.parse(dto.getCheckTime()));
+            } catch (DateTimeParseException ex) {
+                // 兜底：使用服务器当前时间
+                e.setCheckTime(LocalDateTime.now(CheckRecord.ZONE_CN));
+            }
+        }
+        return e;
+    }
+
+    private boolean isBlank(String s) {
+        return s == null || s.trim().isEmpty();
     }
 
     private Specification<CheckRecord> likeIfPresent(String field, String q) {

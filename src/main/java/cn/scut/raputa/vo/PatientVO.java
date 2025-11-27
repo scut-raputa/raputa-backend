@@ -7,6 +7,7 @@ import lombok.Data;
 @Builder(toBuilder = true)
 public class PatientVO {
     private String id;
+    private String outpatientId;
     private String name;
     private String gender;
     private Integer age;

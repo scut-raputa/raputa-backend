@@ -9,4 +9,6 @@ import org.springframework.data.jpa.repository.JpaSpecificationExecutor;
 
 public interface PatientRepository extends JpaRepository<Patient, String>, JpaSpecificationExecutor<Patient> {
     long countByAdmit(LocalDate admit);
+
+    boolean existsByOutpatientId(String outpatientId);
 }

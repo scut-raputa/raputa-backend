@@ -49,6 +49,17 @@ public class CsvDataService {
     public String getCsvDirectory() {
         return CSV_DIRECTORY;
     }
+
+    // >>> 新增：会话元信息只读访问（供 RealtimeDataService.stop 使用）
+    public String getSessionPatientId(String deviceId) {
+        return sessionPatientIds.get(deviceId);
+    }
+    public String getSessionPatientName(String deviceId) {
+        return sessionPatientNames.get(deviceId);
+    }
+    public String getSessionDeviceName(String deviceId) {
+        return sessionDeviceNames.get(deviceId);
+    }
     
     /**
      * 获取设备的会话文件夹路径

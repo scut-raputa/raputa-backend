@@ -1,5 +1,8 @@
 package cn.scut.raputa.service;
 
+import cn.scut.raputa.entity.CheckRecord;
+import cn.scut.raputa.repository.CheckRecordRepository;
+import cn.scut.raputa.repository.PatientRepository;
 import cn.scut.raputa.utils.DataBuffer;
 import cn.scut.raputa.utils.SocketTools;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -47,6 +50,9 @@ public class RealtimeDataService {
     
     // CSV写入定时器
     private final ScheduledExecutorService csvWriteScheduler = Executors.newScheduledThreadPool(2);
+
+    private final CheckRecordRepository checkRecordRepository;
+    private final PatientRepository patientRepository;  
 
     /**
      * 设备连接信息
@@ -543,6 +549,40 @@ public class RealtimeDataService {
                     
                     // 保存剩余缓冲数据（在关闭定时器后）
                     saveRemainingData(connection);
+
+                    // === 新增：停止时记录一次检查记录，并把 patient.checked 置 true ===
+                    try {
+                        // 1) 取会话元信息（停止后才调用，依赖上一步 startDataReceiving 时 setSessionMeta）
+                        String pid   = csvDataService.getSessionPatientId(deviceId);
+                        String pname = csvDataService.getSessionPatientName(deviceId);
+                        String staff = csvDataService.getSessionDeviceName(deviceId); // 没有操作者就用设备名；也可换成当前登录用户
+
+                        if (pid != null && !pid.isBlank()) {
+                            // 2) 追加一条 check_record
+                            CheckRecord rec = new CheckRecord();
+                            rec.setPatientId(pid);
+                            rec.setName((pname == null || pname.isBlank()) ? "未知" : pname);
+                            rec.setStaff((staff == null || staff.isBlank()) ? "系统" : staff);
+                            rec.setCheckTime(java.time.LocalDateTime.now(CheckRecord.ZONE_CN));
+                            // ★ 这里的枚举值请替换为你项目里真实存在的那个（示例用 NORMAL 占位）
+                            rec.setResult(cn.scut.raputa.enums.CheckResult.NORMAL);
+                            checkRecordRepository.save(rec);
+
+                            // 3) 如果患者 checked==false，则置 true
+                            patientRepository.findById(pid).ifPresent(p -> {
+                                if (!p.isChecked()) {
+                                    p.setChecked(true);
+                                    patientRepository.save(p);
+                                }
+                            });
+
+                            log.info("已写入检查记录 & 标记患者({})为已检测", pid);
+                        } else {
+                            log.warn("停止检测：未能获取 patientId（deviceId={}），跳过检查记录写入", deviceId);
+                        }
+                    } catch (Exception e) {
+                        log.error("停止检测时写入检查记录/更新患者状态失败：deviceId={}", deviceId, e);
+                    }
                     
                     // 关闭CSV写入器
                     csvDataService.closeWriter(deviceId);

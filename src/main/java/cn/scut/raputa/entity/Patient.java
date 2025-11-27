@@ -19,6 +19,9 @@ public class Patient {
     @Column(length = 20)
     private String id;
 
+    @Column(name = "outpatient_id", nullable = false, length = 32, unique = true)
+    private String outpatientId;
+
     @Column(nullable = false, length = 64)
     private String name;
 
