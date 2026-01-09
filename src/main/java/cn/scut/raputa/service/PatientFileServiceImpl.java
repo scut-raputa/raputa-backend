@@ -6,7 +6,6 @@ import cn.scut.raputa.entity.PatientFile;
 import cn.scut.raputa.entity.key.PatientFileId;
 import cn.scut.raputa.repository.PatientFileRepository;
 import cn.scut.raputa.repository.PatientRepository;
-import cn.scut.raputa.service.PatientFileService;
 import cn.scut.raputa.vo.PatientFilesOverviewVO;
 import jakarta.persistence.criteria.Predicate;
 import lombok.RequiredArgsConstructor;
@@ -15,7 +14,6 @@ import org.springframework.stereotype.Service;
 
 import java.nio.file.Path;
 import java.time.*;
-import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -25,8 +23,6 @@ public class PatientFileServiceImpl implements PatientFileService {
 
     private final PatientRepository patientRepository;
     private final PatientFileRepository patientFileRepository;
-
-    private static final DateTimeFormatter SESSION_TS = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
 
     @Override
     public void record(String patientId, String absolutePath, String fileType, LocalDateTime savedAt) {
@@ -41,6 +37,10 @@ public class PatientFileServiceImpl implements PatientFileService {
         entity.setSessionKey(sessionKey);
 
         patientFileRepository.save(entity);
+
+        Patient patient = patientRepository.findById(patientId).orElse(null);
+        patient.setChecked(true);
+        patientRepository.save(patient);
     }
 
     private String extractSessionKey(String absolutePath) {
@@ -57,10 +57,6 @@ public class PatientFileServiceImpl implements PatientFileService {
     public List<PatientFilesOverviewVO> overview(LocalDate date, List<String> filterPatientIds, List<String> fileTypes, String fileNameLike) {
         // 1) 所有患者（用于“无记录也返回”）
         List<Patient> patients = patientRepository.findAll();
-
-        // 建立 patientId -> name
-        Map<String, String> idName = patients.stream()
-                .collect(Collectors.toMap(Patient::getId, Patient::getName));
 
         // 2) 构建筛选
         Specification<PatientFile> spec = (root, q, cb) -> {

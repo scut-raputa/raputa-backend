@@ -103,7 +103,7 @@ public class CsvDataService {
 
     /**
      * 写入IMU数据到CSV文件
-     * 
+     *
      * @param deviceId 设备ID
      * @param dataList IMU数据列表 [timestamp, x, y, z]
      */
@@ -111,7 +111,7 @@ public class CsvDataService {
         if (dataList == null || dataList.isEmpty()) {
             return;
         }
-        
+
         try {
             // 检查是否已有writer，如果没有则创建新的文件
             CSVWriter writer = imuWriters.computeIfAbsent(deviceId, id -> {
@@ -119,10 +119,9 @@ public class CsvDataService {
                     Path filePath = getSessionFilePath(deviceId, "imu.csv");
                     CSVWriter csvWriter = new CSVWriter(new FileWriter(filePath.toFile(), true));
                     if (Files.size(filePath) == 0) {
+                        // 只写表头，不登记 PatientFile，先当“临时文件”
                         csvWriter.writeNext(new String[]{"time", "X", "Y", "Z"});
                         csvWriter.flush();
-                        String patientId = sessionPatientIds.getOrDefault(deviceId, "unknown");
-                        patientFileService.record(patientId, filePath.toAbsolutePath().toString(), "csv", LocalDateTime.now());
                     }
                     log.info("创建新的IMU CSV文件: {}", filePath);
                     return csvWriter;
@@ -131,17 +130,17 @@ public class CsvDataService {
                     return null;
                 }
             });
-            
+
             if (writer != null) {
                 // 写入数据
                 for (String[] data : dataList) {
                     writer.writeNext(data);
                 }
                 writer.flush();
-                
+
                 log.debug("成功写入 {} 条IMU数据", dataList.size());
             }
-            
+
         } catch (IOException e) {
             log.error("写入IMU数据到CSV文件失败", e);
         }
@@ -149,7 +148,7 @@ public class CsvDataService {
     
     /**
      * 写入GAS数据到CSV文件
-     * 
+     *
      * @param deviceId 设备ID
      * @param dataList GAS数据列表 [timestamp, flow]
      */
@@ -157,7 +156,7 @@ public class CsvDataService {
         if (dataList == null || dataList.isEmpty()) {
             return;
         }
-        
+
         try {
             // 检查是否已有writer，如果没有则创建新的文件
             CSVWriter writer = gasWriters.computeIfAbsent(deviceId, id -> {
@@ -165,10 +164,9 @@ public class CsvDataService {
                     Path filePath = getSessionFilePath(deviceId, "gas.csv");
                     CSVWriter csvWriter = new CSVWriter(new FileWriter(filePath.toFile(), true));
                     if (Files.size(filePath) == 0) {
+                        // 只写表头，不登记 PatientFile，先当“临时文件”
                         csvWriter.writeNext(new String[]{"time", "value"});
                         csvWriter.flush();
-                        String patientId = sessionPatientIds.getOrDefault(deviceId, "unknown");
-                        patientFileService.record(patientId, filePath.toAbsolutePath().toString(), "csv", LocalDateTime.now());
                     }
                     log.info("创建新的GAS CSV文件: {}", filePath);
                     return csvWriter;
@@ -177,17 +175,17 @@ public class CsvDataService {
                     return null;
                 }
             });
-            
+
             if (writer != null) {
                 // 写入数据
                 for (String[] data : dataList) {
                     writer.writeNext(data);
                 }
                 writer.flush();
-                
+
                 log.debug("成功写入 {} 条GAS数据", dataList.size());
             }
-            
+
         } catch (IOException e) {
             log.error("写入GAS数据到CSV文件失败", e);
         }
@@ -225,35 +223,11 @@ public class CsvDataService {
     
     /**
      * 关闭指定设备的CSV写入器
+     *
+     * 这里只负责关 writer 和打日志，不再登记任何 PatientFile，
+     * 也不清理 sessionFolders / sessionPatientIds，留给“最终确认”来做。
      */
-    // public void closeWriter(String deviceId) {
-    //     try {
-    //         CSVWriter imuWriter = imuWriters.remove(deviceId);
-    //         if (imuWriter != null) {
-    //             imuWriter.close();
-    //             log.info("关闭设备 {} 的IMU CSV写入器", deviceId);
-    //         }
-            
-    //         CSVWriter gasWriter = gasWriters.remove(deviceId);
-    //         if (gasWriter != null) {
-    //             gasWriter.close();
-    //             log.info("关闭设备 {} 的GAS CSV写入器", deviceId);
-    //         }
-            
-    //         // 清理会话元信息
-    //         String sessionFolder = sessionFolders.remove(deviceId);
-    //         sessionPatientIds.remove(deviceId);
-    //         sessionPatientNames.remove(deviceId);
-    //         sessionDeviceNames.remove(deviceId);
-            
-    //         if (sessionFolder != null) {
-    //             log.info("设备 {} 会话文件已保存到: {}", deviceId, sessionFolder);
-    //         }
-    //     } catch (IOException e) {
-    //         log.error("关闭CSV写入器失败: {}", deviceId, e);
-    //     }
-    // }
-        public void closeWriter(String deviceId) {
+    public void closeWriter(String deviceId) {
         try {
             CSVWriter imuWriter = imuWriters.remove(deviceId);
             if (imuWriter != null) {
@@ -268,29 +242,70 @@ public class CsvDataService {
             }
 
             String sessionFolder = sessionFolders.get(deviceId);
-            String patientId = sessionPatientIds.getOrDefault(deviceId, "unknown");
-
-            // 👉 如果会话目录里存在 audio.wav，则登记到DB
             if (sessionFolder != null) {
-                Path audio = Paths.get(sessionFolder, "audio.wav");
-                if (Files.exists(audio)) {
-                    patientFileService.record(patientId, audio.toAbsolutePath().toString(), "wav", LocalDateTime.now());
-                    log.info("登记音频文件: {}", audio);
-                }
-                log.info("设备 {} 会话文件已保存到: {}", deviceId, sessionFolder);
+                log.info("设备 {} 本次会话文件临时保存在: {}", deviceId, sessionFolder);
             }
 
-            // 清理元信息
-            sessionFolders.remove(deviceId);
-            sessionPatientIds.remove(deviceId);
-            sessionPatientNames.remove(deviceId);
-            sessionDeviceNames.remove(deviceId);
+            // ❗ 不在这里登记 audio.wav，不在这里清理 session 元信息
+            // 由 finalizeSessionFiles 来做“临时转正式”
 
         } catch (IOException e) {
             log.error("关闭CSV写入器失败: {}", deviceId, e);
         }
     }
-    
+
+    /**
+     * 在医生确认报告并下载后调用：
+     * 将本次会话的 imu.csv / gas.csv / audio.wav 统一登记为正式患者文件，
+     * 然后清理会话元信息。
+     */
+    public void finalizeSessionFiles(String deviceId) {
+        String sessionFolder = sessionFolders.get(deviceId);
+        String patientId = sessionPatientIds.getOrDefault(deviceId, "unknown");
+
+        if (sessionFolder == null || "unknown".equals(patientId)) {
+            log.warn("无法 finalize 会话: deviceId={}, sessionFolder={}, patientId={}",
+                    deviceId, sessionFolder, patientId);
+            return;
+        }
+
+        Path folder = Paths.get(sessionFolder);
+
+        // 统一登记这三类文件（存在才登记，不存在就跳过）
+        registerFileIfExists(patientId, folder.resolve("imu.csv"), "csv");
+        registerFileIfExists(patientId, folder.resolve("gas.csv"), "csv");
+        registerFileIfExists(patientId, folder.resolve("audio.wav"), "wav");
+
+        // 如果将来你想把这些文件从“临时目录”移到“正式目录”，可以在这里做 move
+
+        // 清理会话元信息 —— 这次检测已经“定案”
+        sessionFolders.remove(deviceId);
+        sessionPatientIds.remove(deviceId);
+        sessionPatientNames.remove(deviceId);
+        sessionDeviceNames.remove(deviceId);
+
+        log.info("会话文件已登记为正式记录并清理元信息: deviceId={}, folder={}", deviceId, sessionFolder);
+    }
+
+    /**
+     * 辅助：文件存在才登记到 PatientFile
+     */
+    private void registerFileIfExists(String patientId, Path path, String ext) {
+        try {
+            if (Files.exists(path)) {
+                patientFileService.record(
+                        patientId,
+                        path.toAbsolutePath().toString(),
+                        ext,
+                        LocalDateTime.now());
+                log.info("登记患者文件: patientId={}, file={}, ext={}", patientId, path, ext);
+            } else {
+                log.warn("finalize 时文件不存在: {}", path);
+            }
+        } catch (Exception e) {
+            log.error("登记文件失败: {}", path, e);
+        }
+    }
 
     
     /**

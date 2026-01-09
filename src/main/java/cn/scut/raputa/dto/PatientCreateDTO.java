@@ -27,7 +27,4 @@ public class PatientCreateDTO {
     @NotBlank
     @Size(max = 255)
     private String address;
-
-    @NotNull
-    private Boolean checked;
 }

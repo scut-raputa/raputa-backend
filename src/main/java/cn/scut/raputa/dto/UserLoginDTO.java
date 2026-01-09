@@ -13,11 +13,11 @@ public class UserLoginDTO {
     
     @NotBlank(message = "用户名不能为空")
     @Size(max = 64, message = "用户名长度不能超过64个字符")
-    @Schema(description = "用户名", example = "admin", required = true)
+    @Schema(description = "用户名", example = "admin", requiredMode = Schema.RequiredMode.REQUIRED)
     private String username;
 
     @NotBlank(message = "密码不能为空")
     @Size(min = 6, max = 100, message = "密码长度必须在6-100个字符之间")
-    @Schema(description = "密码", example = "123456", required = true)
+    @Schema(description = "密码", example = "123456", requiredMode = Schema.RequiredMode.REQUIRED)
     private String password;
 }

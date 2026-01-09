@@ -71,7 +71,7 @@ public class PatientServiceImpl implements PatientService {
         p.setBirth(dto.getBirth());
         p.setDept(dto.getDept().trim());
         p.setAddress(dto.getAddress().trim());
-        p.setChecked(Boolean.TRUE.equals(dto.getChecked()));
+        p.setChecked(false);
         p.setAdmit(today);
 
         Patient saved = patientRepository.save(p);

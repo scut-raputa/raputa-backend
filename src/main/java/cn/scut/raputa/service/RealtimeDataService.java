@@ -20,7 +20,6 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.Socket;
 import java.time.LocalDateTime;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
@@ -109,12 +108,10 @@ public class RealtimeDataService {
         
         // 音频数据降采样 - 从48kHz降到200Hz
         private int audioPushCount = 0;
-        private int audioPushMethodCallCount = 0; // 调用计数器
         private static final int AUDIO_DOWNSAMPLE_RATIO = 240; // 48000 / 200 = 240
         
         // 定时预测任务
         private java.util.concurrent.ScheduledFuture<?> predictionTask;
-        private long lastPredictionTime = 0; // 上次预测的时间戳
 
         public DeviceConnection(String deviceId) {
             this.deviceId = deviceId;
@@ -138,46 +135,55 @@ public class RealtimeDataService {
      */
     public CompletableFuture<Boolean> startDataReceiving(String deviceIp, String deviceId) {
         return CompletableFuture.supplyAsync(() -> {
+            Socket socket = null;
             try {
                 DeviceConnection connection = new DeviceConnection(deviceId);
                 connection.deviceIp = deviceIp; // 保存IP用于音频RTSP连接
 
                 // 建立TCP连接
-                Socket socket = new Socket(deviceIp, 6667);
+                socket = new Socket(deviceIp, 6667);
                 socket.setSoTimeout(15000);
-                
+
                 connection.socket = socket;
-                connection.inputStream = socket.getInputStream();
+                connection.inputStream  = socket.getInputStream();
                 connection.outputStream = socket.getOutputStream();
                 connection.isConnected.set(true);
-                
+
                 // 发送开始接收命令
                 String command = "true";
                 byte[] commandData = SocketTools.packSFream(command);
                 connection.outputStream.write(commandData);
                 connection.outputStream.flush();
-                
+
                 log.info("成功连接到设备 {}:{}，开始接收数据", deviceIp, 6667);
-                
+
                 // 启动数据接收线程
                 connection.receiveThread = new Thread(() -> receiveDataLoop(connection));
                 connection.receiveThread.setDaemon(true);
                 connection.receiveThread.start();
-                
-                // 启动CSV写入定时器 - 参考原始项目的setTimerWIMU和setTimerWGas
+
+                // 启动CSV写入定时器
                 startCsvWriteTimers(connection);
-                
-                // 启动音频RTSP接收 - 参考原始项目的WaveFrom.play()
+
+                // 启动音频RTSP接收
                 startAudioReceiving(connection);
-                
-                // 启动定时预测任务 - 每10秒执行一次
+
+                // 启动定时预测任务
                 startPredictionTimer(connection);
-                
+
                 deviceConnections.put(deviceId, connection);
                 return true;
-                
+
             } catch (IOException e) {
                 log.error("连接设备失败: {}", deviceIp, e);
+                // 只有在失败路径才关闭 socket
+                if (socket != null && !socket.isClosed()) {
+                    try {
+                        socket.close();
+                    } catch (IOException ex) {
+                        log.warn("关闭失败的设备 socket 时出错", ex);
+                    }
+                }
                 return false;
             }
         });
@@ -191,15 +197,16 @@ public class RealtimeDataService {
             String patientName) {
 
         return CompletableFuture.supplyAsync(() -> {
+            Socket socket = null;
             try {
                 DeviceConnection connection = new DeviceConnection(deviceId);
                 connection.deviceIp = deviceIp; // 保存IP用于音频RTSP连接
 
-                // 1) 先登记会话元信息（关键：必须在任何写入发生前）
+                // 1) 先登记会话元信息
                 csvDataService.setSessionMeta(deviceId, patientId, patientName, deviceName);
 
                 // 2) 建立TCP连接
-                Socket socket = new Socket(deviceIp, 6667);
+                socket = new Socket(deviceIp, 6667);
                 socket.setSoTimeout(15000);
                 connection.socket = socket;
                 connection.inputStream  = socket.getInputStream();
@@ -219,22 +226,27 @@ public class RealtimeDataService {
                 connection.receiveThread.setDaemon(true);
                 connection.receiveThread.start();
 
-                // 5) 启动CSV写定时器（此时已具备患者/设备信息，文件名不会 unknown）
+                // 5) 启动CSV写定时器
                 startCsvWriteTimers(connection);
 
-                // 启动音频RTSP接收 - 参考原始项目的WaveFrom.play()
+                // 启动音频RTSP接收
                 startAudioReceiving(connection);
-                
-                // 启动定时预测任务 - 每10秒执行一次
+
+                // 启动定时预测任务
                 startPredictionTimer(connection);
-                
-                
 
                 deviceConnections.put(deviceId, connection);
                 return true;
 
             } catch (IOException e) {
                 log.error("连接设备失败: {}", deviceIp, e);
+                if (socket != null && !socket.isClosed()) {
+                    try {
+                        socket.close();
+                    } catch (IOException ex) {
+                        log.warn("关闭失败的设备 socket 时出错", ex);
+                    }
+                }
                 return false;
             }
         });
@@ -304,8 +316,6 @@ public class RealtimeDataService {
      */
     private void performPrediction(DeviceConnection connection) {
         try {
-            long currentTime = System.currentTimeMillis();
-            
             log.info("开始执行设备 {} 的模型预测", connection.deviceId);
             
             // 导出最近10秒的数据段
@@ -325,9 +335,6 @@ public class RealtimeDataService {
             if (result != null) {
                 // 推送结果到前端
                 webSocketService.pushPredictionResult(connection.deviceId, result);
-                
-                // 记录预测时间
-                connection.lastPredictionTime = currentTime;
                 
                 if (result.hasSwallowEvents()) {
                     log.info("设备 {} 预测成功，检测到 {} 个吴咙事件", 
@@ -551,38 +558,38 @@ public class RealtimeDataService {
                     saveRemainingData(connection);
 
                     // === 新增：停止时记录一次检查记录，并把 patient.checked 置 true ===
-                    try {
-                        // 1) 取会话元信息（停止后才调用，依赖上一步 startDataReceiving 时 setSessionMeta）
-                        String pid   = csvDataService.getSessionPatientId(deviceId);
-                        String pname = csvDataService.getSessionPatientName(deviceId);
-                        String staff = csvDataService.getSessionDeviceName(deviceId); // 没有操作者就用设备名；也可换成当前登录用户
+                    // try {
+                    //     // 1) 取会话元信息（停止后才调用，依赖上一步 startDataReceiving 时 setSessionMeta）
+                    //     String pid   = csvDataService.getSessionPatientId(deviceId);
+                    //     String pname = csvDataService.getSessionPatientName(deviceId);
+                    //     String staff = csvDataService.getSessionDeviceName(deviceId); // 没有操作者就用设备名；也可换成当前登录用户
 
-                        if (pid != null && !pid.isBlank()) {
-                            // 2) 追加一条 check_record
-                            CheckRecord rec = new CheckRecord();
-                            rec.setPatientId(pid);
-                            rec.setName((pname == null || pname.isBlank()) ? "未知" : pname);
-                            rec.setStaff((staff == null || staff.isBlank()) ? "系统" : staff);
-                            rec.setCheckTime(java.time.LocalDateTime.now(CheckRecord.ZONE_CN));
-                            // ★ 这里的枚举值请替换为你项目里真实存在的那个（示例用 NORMAL 占位）
-                            rec.setResult(cn.scut.raputa.enums.CheckResult.NORMAL);
-                            checkRecordRepository.save(rec);
+                    //     if (pid != null && !pid.isBlank()) {
+                    //         // 2) 追加一条 check_record
+                    //         CheckRecord rec = new CheckRecord();
+                    //         rec.setPatientId(pid);
+                    //         rec.setName((pname == null || pname.isBlank()) ? "未知" : pname);
+                    //         rec.setStaff((staff == null || staff.isBlank()) ? "系统" : staff);
+                    //         rec.setCheckTime(java.time.LocalDateTime.now(CheckRecord.ZONE_CN));
+                    //         // ★ 这里的枚举值请替换为你项目里真实存在的那个（示例用 NORMAL 占位）
+                    //         rec.setResult(cn.scut.raputa.enums.CheckResult.NORMAL);
+                    //         checkRecordRepository.save(rec);
 
-                            // 3) 如果患者 checked==false，则置 true
-                            patientRepository.findById(pid).ifPresent(p -> {
-                                if (!p.isChecked()) {
-                                    p.setChecked(true);
-                                    patientRepository.save(p);
-                                }
-                            });
+                    //         // 3) 如果患者 checked==false，则置 true
+                    //         patientRepository.findById(pid).ifPresent(p -> {
+                    //             if (!p.isChecked()) {
+                    //                 p.setChecked(true);
+                    //                 patientRepository.save(p);
+                    //             }
+                    //         });
 
-                            log.info("已写入检查记录 & 标记患者({})为已检测", pid);
-                        } else {
-                            log.warn("停止检测：未能获取 patientId（deviceId={}），跳过检查记录写入", deviceId);
-                        }
-                    } catch (Exception e) {
-                        log.error("停止检测时写入检查记录/更新患者状态失败：deviceId={}", deviceId, e);
-                    }
+                    //         log.info("已写入检查记录 & 标记患者({})为已检测", pid);
+                    //     } else {
+                    //         log.warn("停止检测：未能获取 patientId（deviceId={}），跳过检查记录写入", deviceId);
+                    //     }
+                    // } catch (Exception e) {
+                    //     log.error("停止检测时写入检查记录/更新患者状态失败：deviceId={}", deviceId, e);
+                    // }
                     
                     // 关闭CSV写入器
                     csvDataService.closeWriter(deviceId);
@@ -1198,8 +1205,6 @@ public class RealtimeDataService {
             if (frame.samples == null || frame.samples.length == 0) {
                 return;
             }
-            
-            connection.audioPushMethodCallCount++;
             
             // 获取第一个声道的数据
             java.nio.Buffer buffer = frame.samples[0];

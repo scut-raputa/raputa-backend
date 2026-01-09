@@ -7,6 +7,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.client.RestTemplate;
+import org.springframework.core.ParameterizedTypeReference;
 
 import java.io.File;
 import java.util.List;
@@ -52,11 +53,11 @@ public class ModelPredictionService {
                 audioFile.getName(), imuFile.getName(), gasFile.getName());
             
             // 发送请求
-            ResponseEntity<Map> response = restTemplate.exchange(
+            ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
                 MODEL_API_URL,
                 HttpMethod.POST,
                 requestEntity,
-                Map.class
+                new ParameterizedTypeReference<Map<String, Object>>() {}
             );
             
             if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {

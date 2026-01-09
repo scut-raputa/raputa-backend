@@ -331,6 +331,28 @@ public class RealtimeDataController {
         }
     }
 
+    @PostMapping("/session/finalize")
+    @Operation(
+        summary = "确认本次实时检测为正式记录",
+        description = "在医生确认报告并下载后调用，将本次会话的 imu/gas/audio 文件登记为正式患者文件"
+    )
+    @ApiResponses(value = {
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "200", description = "会话文件登记成功"),
+            @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "500", description = "服务器内部错误")
+    })
+    public ResponseEntity<ApiResponse<Boolean>> finalizeSession(
+            @Parameter(description = "设备ID", required = true)
+            @RequestParam String deviceId) {
+
+        try {
+            csvDataService.finalizeSessionFiles(deviceId);
+            return ResponseEntity.ok(ApiResponse.ok(true, "会话文件已登记为正式记录"));
+        } catch (Exception e) {
+            log.error("finalize 会话失败: deviceId={}", deviceId, e);
+            return ResponseEntity.ok(ApiResponse.<Boolean>error(500, "会话文件登记失败: " + e.getMessage()));
+        }
+    }
+
     // ========== DTO类 ==========
 
     /**

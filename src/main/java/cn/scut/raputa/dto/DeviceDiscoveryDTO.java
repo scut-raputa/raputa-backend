@@ -18,7 +18,7 @@ public class DeviceDiscoveryDTO {
     @NotNull(message = "UDP端口不能为空")
     @Min(value = 1024, message = "端口号不能小于1024")
     @Max(value = 65535, message = "端口号不能大于65535")
-    @Schema(description = "UDP监听端口", example = "6666", required = true)
+    @Schema(description = "UDP监听端口", example = "6666", requiredMode = Schema.RequiredMode.REQUIRED)
     private Integer port = 6666;
     
     @Min(value = 1000, message = "超时时间不能小于1000毫秒")
@@ -31,5 +31,3 @@ public class DeviceDiscoveryDTO {
     @Schema(description = "设备扫描间隔(毫秒)", example = "20")
     private Integer scanInterval = 20;
 }
-
-
