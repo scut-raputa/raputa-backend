@@ -244,16 +244,11 @@ public class StatsService {
      * 如果日期范围<=7天，使用星期几；否则使用日期
      */
     private String formatDateCategory(LocalDate date, LocalDate startDate, LocalDate endDate) {
-        long daysBetween = ChronoUnit.DAYS.between(startDate, endDate) + 1;
-
-        if (daysBetween <= 7) {
-            // 使用星期几
-            int dayOfWeek = date.getDayOfWeek().getValue() % 7; // 转换为0-6 (周日为0)
-            return WEEKDAYS[dayOfWeek];
-        } else {
-            // 使用日期
-            return date.format(DateTimeFormatter.ofPattern("MM-dd"));
-        }
+        // 始终返回完整日期格式
+        //return date.format(DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+        // 或者使用 "MM-dd" 格式
+        return date.format(DateTimeFormatter.ofPattern("MM-dd"));
     }
+
 }
 
