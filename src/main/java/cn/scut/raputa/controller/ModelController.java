@@ -1,5 +1,6 @@
 package cn.scut.raputa.controller;
 
+import cn.scut.raputa.dto.ModelDTO;
 import cn.scut.raputa.response.ApiResponse;
 import cn.scut.raputa.service.ModelService;
 import cn.scut.raputa.vo.ModelVO;
@@ -25,6 +26,27 @@ public class ModelController {
             @RequestParam(required = false) String date) {
         Page<ModelVO> pg = modelService.page(page, size, id, func, name, uploader, date);
         return ApiResponse.ok(new PageWrap<>(pg.getContent(), pg.getTotalElements()));
+    }
+
+    @GetMapping("/stats")
+    public ApiResponse<?> stats() {
+        return ApiResponse.ok(modelService.stats());
+    }
+
+    @PostMapping
+    public ApiResponse<?> create(@RequestBody ModelDTO dto) {
+        return ApiResponse.ok(modelService.create(dto));
+    }
+
+    @PutMapping("/{id}")
+    public ApiResponse<?> update(@PathVariable String id, @RequestBody ModelDTO dto) {
+        return ApiResponse.ok(modelService.update(id, dto));
+    }
+
+    @DeleteMapping("/{id}")
+    public ApiResponse<?> delete(@PathVariable String id) {
+        modelService.delete(id);
+        return ApiResponse.ok(null);
     }
 
     public record PageWrap<T>(java.util.List<T> items, long total) {
