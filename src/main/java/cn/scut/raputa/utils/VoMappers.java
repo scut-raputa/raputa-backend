@@ -130,6 +130,7 @@ public final class VoMappers {
         return DeviceVO.builder()
                 .id(d.getId())
                 .name(d.getName())
+                .ip(d.getIp())
                 .lastConnectedTime(d.getLastConnectedTime() == null ? null
                         : d.getLastConnectedTime().format(DTMF))
                 .status(d.getStatus())

@@ -25,6 +25,9 @@ public class Device {
     @Column(nullable = false, length = 128)
     private String name;
 
+    @Column(nullable = false, length = 64)
+    private String ip;
+
     @Column(name = "last_connected_time")
     private LocalDateTime lastConnectedTime;
 

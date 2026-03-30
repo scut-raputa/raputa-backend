@@ -81,6 +81,7 @@ public class DeviceServiceImpl implements DeviceService {
 
     private void applyDto(Device device, DeviceDTO dto) {
         device.setName(dto.getName());
+        device.setIp(normalizeIp(dto.getIp()));
         device.setStatus(dto.getStatus() != null ? dto.getStatus() : "离线");
         device.setDescription(dto.getDescription());
         device.setStorageLocation(dto.getStorageLocation());
@@ -94,6 +95,11 @@ public class DeviceServiceImpl implements DeviceService {
         try { return LocalDateTime.parse(s, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")); } catch (Exception ignored) {}
         try { return LocalDateTime.parse(s, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")); } catch (Exception ignored) {}
         return null;
+    }
+
+    private String normalizeIp(String ip) {
+        if (ip == null || ip.isBlank()) return "0.0.0.0";
+        return ip.trim();
     }
 
     private String generateId() {

@@ -9,6 +9,7 @@ import lombok.*;
 public class DeviceVO {
     private String id;
     private String name;
+    private String ip;
     private String lastConnectedTime; // formatted "yyyy-MM-dd HH:mm:ss", nullable
     private String status;
     private String description;
