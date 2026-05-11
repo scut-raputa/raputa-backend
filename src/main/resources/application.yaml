@@ -44,9 +44,6 @@ raputa:
     ttl-seconds: 45
     heartbeat-interval-seconds: 15
     cleaner-interval-seconds: 30
-  realtime:
-    audio-rtsp-port: ${RAPUTA_AUDIO_RTSP_PORT:8554}
-    audio-rtsp-path-candidates: ${RAPUTA_AUDIO_RTSP_PATH_CANDIDATES:/stream/audio,/audio,/live/audio,/stream,/live,/mic}
 
 # SpringDoc OpenAPI 配置
 springdoc:
