@@ -14,7 +14,6 @@ import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
-import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.UUID;
 
@@ -65,6 +64,8 @@ public class AppointmentServiceImpl implements AppointmentService {
 
     @Override
     public AppointmentVO create(AppointmentCreateDTO dto) {
+        validateApptTime(dto.getTime());
+
         // 修复：使用 UUID 确保唯一性，避免并发问题
         String outpatientId = generateUniqueId();
 
@@ -96,7 +97,10 @@ public class AppointmentServiceImpl implements AppointmentService {
                 .orElseThrow(() -> new BizException(404, "预约不存在"));
         if (dto.getName() != null) a.setName(dto.getName().trim());
         if (dto.getDept() != null) a.setDept(dto.getDept().trim());
-        if (dto.getTime() != null) a.setApptTime(dto.getTime());
+        if (dto.getTime() != null) {
+            validateApptTime(dto.getTime());
+            a.setApptTime(dto.getTime());
+        }
 
         Appointment saved = appointmentRepository.save(a);
         return VoMappers.toAppointmentVO(saved);
@@ -111,6 +115,16 @@ public class AppointmentServiceImpl implements AppointmentService {
             appointmentRepository.deleteById(id);
         } catch (DataIntegrityViolationException ex) {
             throw new BizException(409, "该预约存在关联记录，无法删除");
+        }
+    }
+
+    private void validateApptTime(LocalDate apptTime) {
+        if (apptTime == null) {
+            throw new BizException(400, "预约时间不能为空");
+        }
+        LocalDate today = LocalDate.now(ZoneId.of("Asia/Shanghai"));
+        if (apptTime.isBefore(today)) {
+            throw new BizException(400, "预约时间必须为今天或之后");
         }
     }
 }

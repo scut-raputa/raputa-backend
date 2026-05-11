@@ -1,11 +1,14 @@
 package cn.scut.raputa.service;
 
+import cn.scut.raputa.config.InferenceProperties;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.*;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 import org.springframework.core.ParameterizedTypeReference;
 
@@ -19,12 +22,16 @@ import java.util.Map;
 @Slf4j
 @Service
 public class ModelPredictionService {
-    
-    private static final String MODEL_API_URL = "http://222.201.187.184:8000/upload_predict/";
+
     private final RestTemplate restTemplate;
-    
-    public ModelPredictionService() {
-        this.restTemplate = new RestTemplate();
+    private final InferenceProperties inferenceProperties;
+
+    public ModelPredictionService(InferenceProperties inferenceProperties) {
+        this.inferenceProperties = inferenceProperties;
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(Math.max(inferenceProperties.getConnectTimeoutMs(), 100));
+        factory.setReadTimeout(Math.max(inferenceProperties.getReadTimeoutMs(), 100));
+        this.restTemplate = new RestTemplate(factory);
     }
     
     /**
@@ -37,6 +44,8 @@ public class ModelPredictionService {
      */
     public PredictionResult uploadAndPredict(File audioFile, File imuFile, File gasFile) {
         try {
+            String modelApiUrl = buildUploadPredictUrl();
+
             // 构建multipart请求
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.MULTIPART_FORM_DATA);
@@ -45,21 +54,21 @@ public class ModelPredictionService {
             body.add("audio", new FileSystemResource(audioFile));
             body.add("imu", new FileSystemResource(imuFile));
             body.add("gas", new FileSystemResource(gasFile));
-            
+
             HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
-            
-            log.info("调用模型API: {}", MODEL_API_URL);
+
+            log.info("调用模型API: {}", modelApiUrl);
             log.info("上传文件: audio={}, imu={}, gas={}", 
                 audioFile.getName(), imuFile.getName(), gasFile.getName());
-            
+
             // 发送请求
             ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
-                MODEL_API_URL,
+                modelApiUrl,
                 HttpMethod.POST,
                 requestEntity,
                 new ParameterizedTypeReference<Map<String, Object>>() {}
             );
-            
+
             if (response.getStatusCode() == HttpStatus.OK && response.getBody() != null) {
                 Map<String, Object> result = response.getBody();
                 log.info("模型预测成功，结果: {}", result);
@@ -68,11 +77,25 @@ public class ModelPredictionService {
                 log.error("模型预测失败: status={}", response.getStatusCode());
                 return null;
             }
-            
-        } catch (Exception e) {
+
+        } catch (RestClientException e) {
             log.error("调用模型API失败", e);
             return null;
         }
+    }
+
+    private String buildUploadPredictUrl() {
+        String baseUrl = inferenceProperties.getBaseUrl();
+        if (baseUrl == null || baseUrl.isBlank()) {
+            throw new IllegalStateException("raputa.inference.base-url 未配置");
+        }
+        String normalizedBase = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
+        String uploadPath = inferenceProperties.getUploadPredictPath();
+        if (uploadPath == null || uploadPath.isBlank()) {
+            uploadPath = "/upload_predict/";
+        }
+        String normalizedPath = uploadPath.startsWith("/") ? uploadPath : "/" + uploadPath;
+        return normalizedBase + normalizedPath;
     }
     
     /**

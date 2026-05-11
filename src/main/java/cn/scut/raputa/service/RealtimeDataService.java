@@ -1,8 +1,13 @@
 package cn.scut.raputa.service;
 
-import cn.scut.raputa.entity.CheckRecord;
-import cn.scut.raputa.repository.CheckRecordRepository;
-import cn.scut.raputa.repository.PatientRepository;
+import cn.scut.raputa.config.InferenceProperties;
+import cn.scut.raputa.dto.DeviceOccupationDTO;
+import cn.scut.raputa.dto.RealtimeConnectResultDTO;
+import cn.scut.raputa.entity.CaptureSession;
+import cn.scut.raputa.entity.Device;
+import cn.scut.raputa.entity.DeviceSessionLock;
+import cn.scut.raputa.repository.CaptureSessionRepository;
+import cn.scut.raputa.repository.DeviceRepository;
 import cn.scut.raputa.utils.DataBuffer;
 import cn.scut.raputa.utils.SocketTools;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -12,22 +17,34 @@ import org.bytedeco.ffmpeg.global.avcodec;
 import org.bytedeco.javacv.FFmpegFrameGrabber;
 import org.bytedeco.javacv.FFmpegFrameRecorder;
 import org.bytedeco.javacv.Frame;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.net.Socket;
+import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import javax.sound.sampled.AudioFileFormat;
+import javax.sound.sampled.AudioFormat;
+import javax.sound.sampled.AudioInputStream;
+import javax.sound.sampled.AudioSystem;
 
 /**
  * 实时数据接收服务
@@ -43,15 +60,27 @@ public class RealtimeDataService {
     private final CsvDataService csvDataService;
     private final WebSocketService webSocketService;
     private final ModelPredictionService modelPredictionService;
+    private final CaptureSessionRepository captureSessionRepository;
+    private final DeviceRepository deviceRepository;
+    private final SessionPathResolver sessionPathResolver;
+    private final FileStorageService fileStorageService;
+    private final InferenceProperties inferenceProperties;
+    private final DeviceLockService deviceLockService;
+
+    @Value("${raputa.device-lock.heartbeat-interval-seconds:15}")
+    private long lockHeartbeatIntervalSeconds;
+
+    @Value("${raputa.realtime.audio-rtsp-port:8554}")
+    private int audioRtspPort;
+
+    @Value("${raputa.realtime.audio-rtsp-path-candidates:/stream/audio,/audio,/live/audio,/stream,/live,/mic}")
+    private String audioRtspPathCandidates;
 
     // 设备连接状态管理
     private final ConcurrentHashMap<String, DeviceConnection> deviceConnections = new ConcurrentHashMap<>();
     
     // CSV写入定时器
     private final ScheduledExecutorService csvWriteScheduler = Executors.newScheduledThreadPool(2);
-
-    private final CheckRecordRepository checkRecordRepository;
-    private final PatientRepository patientRepository;  
 
     /**
      * 设备连接信息
@@ -61,6 +90,7 @@ public class RealtimeDataService {
         private InputStream inputStream;
         private OutputStream outputStream;
         private Thread receiveThread;
+        private String sessionId;
         private final AtomicBoolean isConnected = new AtomicBoolean(false);
         private final AtomicBoolean isReceiving = new AtomicBoolean(false);
         private byte[] buffer = new byte[0];
@@ -92,10 +122,14 @@ public class RealtimeDataService {
         private FFmpegFrameRecorder audioRecorder;
         private Thread audioThread;
         private final AtomicBoolean audioReceiving = new AtomicBoolean(false);
+        private java.util.concurrent.ScheduledFuture<?> audioFallbackTask;
+        private long audioFallbackStartTimestamp = 0;
+        private long audioFallbackPointCount = 0;
         private String deviceIp;
         private String audioFilePath;
         private int audioRetryCount = 0; // 音频重试次数
         private static final int MAX_AUDIO_RETRY = 5; // 最大重试次数
+        private String activeRtspPath = "";
         private long audioStartTimestamp = 0; // 音频开始时间戳（毫秒）
         private long audioFrameCount = 0; // 音频帧计数
         private Frame audioFirstFrame; // 保存第一帧，等待所有数据就绪后再初始化录制器
@@ -104,14 +138,19 @@ public class RealtimeDataService {
         private final AtomicBoolean imuReady = new AtomicBoolean(false);
         private final AtomicBoolean gasReady = new AtomicBoolean(false);
         private final AtomicBoolean audioReady = new AtomicBoolean(false);
+        private final AtomicBoolean audioUnavailable = new AtomicBoolean(false);
         private final AtomicBoolean allDataReady = new AtomicBoolean(false);
+        private int maxAudioAttempts = MAX_AUDIO_RETRY;
         
         // 音频数据降采样 - 从48kHz降到200Hz
         private int audioPushCount = 0;
         private static final int AUDIO_DOWNSAMPLE_RATIO = 240; // 48000 / 200 = 240
+        private long audioWsStartTimestamp = 0;
+        private long audioWsPointCount = 0;
         
         // 定时预测任务
         private java.util.concurrent.ScheduledFuture<?> predictionTask;
+        private java.util.concurrent.ScheduledFuture<?> lockHeartbeatTask;
 
         public DeviceConnection(String deviceId) {
             this.deviceId = deviceId;
@@ -131,65 +170,25 @@ public class RealtimeDataService {
     }
 
     /**
+     * 设备占用信息
+     */
+    private record DeviceLease(
+            String sessionId,
+            String deviceId,
+            String patientId,
+            String patientName,
+            LocalDateTime startedAt) {
+    }
+
+    /**
      * 开始连接设备并接收数据
      */
     public CompletableFuture<Boolean> startDataReceiving(String deviceIp, String deviceId) {
-        return CompletableFuture.supplyAsync(() -> {
-            Socket socket = null;
-            try {
-                DeviceConnection connection = new DeviceConnection(deviceId);
-                connection.deviceIp = deviceIp; // 保存IP用于音频RTSP连接
-
-                // 建立TCP连接
-                socket = new Socket(deviceIp, 6667);
-                socket.setSoTimeout(15000);
-
-                connection.socket = socket;
-                connection.inputStream  = socket.getInputStream();
-                connection.outputStream = socket.getOutputStream();
-                connection.isConnected.set(true);
-
-                // 发送开始接收命令
-                String command = "true";
-                byte[] commandData = SocketTools.packSFream(command);
-                connection.outputStream.write(commandData);
-                connection.outputStream.flush();
-
-                log.info("成功连接到设备 {}:{}，开始接收数据", deviceIp, 6667);
-
-                // 启动数据接收线程
-                connection.receiveThread = new Thread(() -> receiveDataLoop(connection));
-                connection.receiveThread.setDaemon(true);
-                connection.receiveThread.start();
-
-                // 启动CSV写入定时器
-                startCsvWriteTimers(connection);
-
-                // 启动音频RTSP接收
-                startAudioReceiving(connection);
-
-                // 启动定时预测任务
-                startPredictionTimer(connection);
-
-                deviceConnections.put(deviceId, connection);
-                return true;
-
-            } catch (IOException e) {
-                log.error("连接设备失败: {}", deviceIp, e);
-                // 只有在失败路径才关闭 socket
-                if (socket != null && !socket.isClosed()) {
-                    try {
-                        socket.close();
-                    } catch (IOException ex) {
-                        log.warn("关闭失败的设备 socket 时出错", ex);
-                    }
-                }
-                return false;
-            }
-        });
+        return startDataReceiving(deviceIp, deviceId, deviceId, "", "")
+                .thenApply(RealtimeConnectResultDTO::isSuccess);
     }
 
-    public CompletableFuture<Boolean> startDataReceiving(
+    public CompletableFuture<RealtimeConnectResultDTO> startDataReceiving(
             String deviceIp,
             String deviceId,
             String deviceName,
@@ -198,15 +197,39 @@ public class RealtimeDataService {
 
         return CompletableFuture.supplyAsync(() -> {
             Socket socket = null;
+            String sessionId = UUID.randomUUID().toString();
+
+            DeviceLease existingLease = tryAcquireDeviceLease(deviceId, sessionId, patientId, patientName);
+            if (existingLease != null) {
+                DeviceOccupationDTO occupation = toOccupation(existingLease, "设备已被占用，当前会话无法连接");
+                log.warn("设备占用冲突: deviceId={}, occupiedBySession={}, patientId={}",
+                        deviceId, existingLease.sessionId, existingLease.patientId);
+                return RealtimeConnectResultDTO.occupied(deviceId, occupation, occupation.getReason());
+            }
+
             try {
+                CaptureSession captureSession = createRealtimeCaptureSession(
+                    sessionId,
+                    deviceId,
+                    patientId,
+                    patientName);
+
                 DeviceConnection connection = new DeviceConnection(deviceId);
                 connection.deviceIp = deviceIp; // 保存IP用于音频RTSP连接
+                connection.sessionId = sessionId;
 
                 // 1) 先登记会话元信息
-                csvDataService.setSessionMeta(deviceId, patientId, patientName, deviceName);
+                csvDataService.setSessionMeta(
+                    deviceId,
+                    patientId,
+                    patientName,
+                    deviceName,
+                    sessionId,
+                    captureSession.getSessionDir());
 
                 // 2) 建立TCP连接
-                socket = new Socket(deviceIp, 6667);
+                socket = new Socket(Proxy.NO_PROXY);
+                socket.connect(new InetSocketAddress(deviceIp, 6667), 5000);
                 socket.setSoTimeout(15000);
                 connection.socket = socket;
                 connection.inputStream  = socket.getInputStream();
@@ -235,10 +258,15 @@ public class RealtimeDataService {
                 // 启动定时预测任务
                 startPredictionTimer(connection);
 
-                deviceConnections.put(deviceId, connection);
-                return true;
+                startLockHeartbeat(connection);
 
-            } catch (IOException e) {
+                updateCaptureSessionStatus(sessionId, "PROCESSING", null, null, null);
+
+                deviceConnections.put(deviceId, connection);
+                log.info("设备连接成功: deviceId={}, sessionId={}", deviceId, sessionId);
+                return RealtimeConnectResultDTO.success(deviceId, sessionId);
+
+            } catch (Exception e) {
                 log.error("连接设备失败: {}", deviceIp, e);
                 if (socket != null && !socket.isClosed()) {
                     try {
@@ -247,9 +275,130 @@ public class RealtimeDataService {
                         log.warn("关闭失败的设备 socket 时出错", ex);
                     }
                 }
-                return false;
+                updateCaptureSessionStatus(sessionId, "FAILED", null, null, null);
+                releaseDeviceLease(deviceId, sessionId, "设备连接失败");
+                return RealtimeConnectResultDTO.failed(deviceId, "设备连接失败");
             }
         });
+    }
+
+    private DeviceLease tryAcquireDeviceLease(String deviceId, String sessionId, String patientId, String patientName) {
+        DeviceLockService.LockAcquireResult result = deviceLockService.tryAcquire(
+                deviceId,
+                sessionId,
+                patientId == null ? "" : patientId.trim(),
+                patientName == null ? "" : patientName.trim(),
+                "realtime-connect");
+
+        if (result.acquired()) {
+            return null;
+        }
+
+        DeviceSessionLock lock = result.lock();
+        if (lock == null) {
+            return new DeviceLease(
+                    "unknown",
+                    deviceId,
+                    patientId == null ? "" : patientId.trim(),
+                    patientName == null ? "" : patientName.trim(),
+                    LocalDateTime.now(CaptureSession.ZONE_CN));
+        }
+
+        return new DeviceLease(
+                lock.getSessionId(),
+                lock.getDeviceId(),
+                lock.getPatientId(),
+                lock.getPatientNameSnapshot(),
+                lock.getStartedAt());
+    }
+
+    private void releaseDeviceLease(String deviceId, String sessionId, String reason) {
+        if (deviceId == null || deviceId.isBlank()) {
+            return;
+        }
+
+        boolean released = deviceLockService.release(deviceId, sessionId, reason, false);
+        if (!released) {
+            log.warn("释放设备占用失败(会话不匹配): deviceId={}, sessionId={}, reason={}", deviceId, sessionId, reason);
+        }
+    }
+
+    private DeviceOccupationDTO toOccupation(DeviceLease lease, String reason) {
+        return DeviceOccupationDTO.builder()
+                .deviceId(lease.deviceId)
+                .occupied(true)
+                .patientId(lease.patientId)
+                .patientName(lease.patientName)
+                .startedAt(lease.startedAt)
+                .reason(reason)
+                .build();
+    }
+
+    private CaptureSession createRealtimeCaptureSession(
+            String sessionId,
+            String deviceId,
+            String patientId,
+            String patientName) {
+        String sessionKey = sessionPathResolver.buildSessionKey("realtime", patientId, patientName);
+        Path sessionDir = fileStorageService.ensureSessionDirectory(sessionKey);
+        String relativeSessionDir = fileStorageService.toRelativePath(sessionDir);
+        LocalDateTime now = LocalDateTime.now(CaptureSession.ZONE_CN);
+
+        CaptureSession session = CaptureSession.builder()
+                .id(sessionId)
+                .mode("REALTIME")
+                .status("CREATED")
+                .patientId(patientId == null ? "" : patientId.trim())
+                .deviceId(deviceId)
+                .sessionKey(sessionKey)
+                .patientNameSnapshot(patientName == null ? "" : patientName.trim())
+                .sessionDir(relativeSessionDir)
+                .inferenceServiceUrl(inferenceProperties.getBaseUrl())
+                .startedAt(now)
+                .build();
+        return captureSessionRepository.save(session);
+    }
+
+    private void updateCaptureSessionStatus(
+            String sessionId,
+            String status,
+            LocalDateTime stoppedAt,
+            LocalDateTime finalizedAt,
+            String modelSnapshotJson) {
+        if (sessionId == null || sessionId.isBlank()) {
+            return;
+        }
+
+        captureSessionRepository.findById(sessionId).ifPresent(session -> {
+            if (status != null && !status.isBlank()) {
+                session.setStatus(status);
+            }
+            if (stoppedAt != null) {
+                session.setStoppedAt(stoppedAt);
+            }
+            if (finalizedAt != null) {
+                session.setFinalizedAt(finalizedAt);
+            }
+            if (modelSnapshotJson != null) {
+                session.setModelSnapshotJson(modelSnapshotJson);
+            }
+            captureSessionRepository.save(session);
+        });
+    }
+
+    private void startLockHeartbeat(DeviceConnection connection) {
+        if (connection.lockHeartbeatTask != null) {
+            connection.lockHeartbeatTask.cancel(false);
+        }
+        long interval = Math.max(lockHeartbeatIntervalSeconds, 5);
+        connection.lockHeartbeatTask = csvWriteScheduler.scheduleAtFixedRate(() -> {
+            try {
+                deviceLockService.heartbeat(connection.deviceId, connection.sessionId);
+            } catch (Exception ex) {
+                log.warn("设备锁心跳失败: deviceId={}, sessionId={}, reason={}",
+                        connection.deviceId, connection.sessionId, ex.getMessage());
+            }
+        }, interval, interval, TimeUnit.SECONDS);
     }
 
     /**
@@ -290,6 +439,12 @@ public class RealtimeDataService {
     /**
      * 启动定时预测任务 - 每10秒导出数据并调用模型预测
      */
+    private boolean isPersistenceReady(DeviceConnection connection) {
+        return connection.imuReady.get()
+                && connection.gasReady.get()
+                && (connection.audioReady.get() || connection.audioUnavailable.get());
+    }
+
     private void startPredictionTimer(DeviceConnection connection) {
         // 确保之前的任务已取消
         if (connection.predictionTask != null) {
@@ -299,8 +454,8 @@ public class RealtimeDataService {
         // 定时预测任务 - 每10秒执行一次，首次15秒后开始（等待数据积累）
         connection.predictionTask = csvWriteScheduler.scheduleAtFixedRate(() -> {
             try {
-                // 只有在所有数据就绪后才执行预测
-                if (connection.allDataReady.get()) {
+                // 音频不可用时允许降级预测（IMU+GAS+静音音频）
+                if (isPersistenceReady(connection)) {
                     performPrediction(connection);
                 }
             } catch (Exception e) {
@@ -315,13 +470,23 @@ public class RealtimeDataService {
      * 执行模型预测 - 导出最近10秒的数据并调用模型
      */
     private void performPrediction(DeviceConnection connection) {
+        File audioSegment = null;
+        File imuSegment = null;
+        File gasSegment = null;
         try {
             log.info("开始执行设备 {} 的模型预测", connection.deviceId);
             
             // 导出最近10秒的数据段
-            File audioSegment = csvDataService.exportAudioSegment(connection.deviceId, 5);
-            File imuSegment = csvDataService.exportDataSegment(connection.deviceId, "imu", 5);
-            File gasSegment = csvDataService.exportDataSegment(connection.deviceId, "gas", 5);
+            audioSegment = csvDataService.exportAudioSegment(connection.deviceId, 5);
+            imuSegment = csvDataService.exportDataSegment(connection.deviceId, "imu", 5);
+            gasSegment = csvDataService.exportDataSegment(connection.deviceId, "gas", 5);
+
+            if (audioSegment == null && connection.audioUnavailable.get()) {
+                audioSegment = createSilentAudioSegment(connection, 5);
+                if (audioSegment != null) {
+                    log.warn("设备 {} 音频流不可用，使用静音音频片段执行降级预测", connection.deviceId);
+                }
+            }
             
             if (audioSegment == null || imuSegment == null || gasSegment == null) {
                 log.warn("设备 {} 数据段导出失败，跳过本次预测", connection.deviceId);
@@ -345,14 +510,47 @@ public class RealtimeDataService {
             } else {
                 log.error("设备 {} 模型预测失败", connection.deviceId);
             }
-            
-            // 清理临时文件
-            if (audioSegment != null && audioSegment.exists()) audioSegment.delete();
-            if (imuSegment != null && imuSegment.exists()) imuSegment.delete();
-            if (gasSegment != null && gasSegment.exists()) gasSegment.delete();
-            
         } catch (Exception e) {
             log.error("执行预测失败", e);
+        } finally {
+            // 清理临时文件
+            if (audioSegment != null && audioSegment.exists()) {
+                audioSegment.delete();
+            }
+            if (imuSegment != null && imuSegment.exists()) {
+                imuSegment.delete();
+            }
+            if (gasSegment != null && gasSegment.exists()) {
+                gasSegment.delete();
+            }
+        }
+    }
+
+    private File createSilentAudioSegment(DeviceConnection connection, int durationSeconds) {
+        try {
+            String sessionFolder = csvDataService.getSessionFolder(connection.deviceId);
+            if (sessionFolder == null) {
+                return null;
+            }
+
+            int sampleRate = 16000;
+            int channels = 1;
+            int bitsPerSample = 16;
+            int samples = Math.max(1, durationSeconds) * sampleRate;
+            byte[] silencePcm = new byte[samples * channels * (bitsPerSample / 8)];
+
+            AudioFormat format = new AudioFormat(sampleRate, bitsPerSample, channels, true, false);
+            File silentFile = new File(sessionFolder,
+                    "audio_segment_silent_" + System.currentTimeMillis() + ".wav");
+
+            try (ByteArrayInputStream bais = new ByteArrayInputStream(silencePcm);
+                 AudioInputStream ais = new AudioInputStream(bais, format, samples)) {
+                AudioSystem.write(ais, AudioFileFormat.Type.WAVE, silentFile);
+            }
+            return silentFile;
+        } catch (Exception e) {
+            log.warn("设备 {} 生成静音音频片段失败: {}", connection.deviceId, e.getMessage());
+            return null;
         }
     }
     
@@ -360,8 +558,8 @@ public class RealtimeDataService {
      * 写入IMU数据到CSV - 参考原始项目的wIMU方法
      */
     private void writeImuDataToCsv(DeviceConnection connection) {
-        // 检查所有数据是否就绪，未就绪则不保存
-        if (!connection.allDataReady.get()) {
+        // 音频失败时允许进入降级保存路径
+        if (!isPersistenceReady(connection)) {
             return;
         }
         
@@ -404,8 +602,8 @@ public class RealtimeDataService {
      * 写入GAS数据到CSV - 参考原始项目的wGas方法
      */
     private void writeGasDataToCsv(DeviceConnection connection) {
-        // 检查所有数据是否就绪，未就绪则不保存
-        if (!connection.allDataReady.get()) {
+        // 音频失败时允许进入降级保存路径
+        if (!isPersistenceReady(connection)) {
             return;
         }
         
@@ -520,12 +718,15 @@ public class RealtimeDataService {
             try {
                 DeviceConnection connection = deviceConnections.get(deviceId);
                 if (connection != null && connection.isConnected.get()) {
+                    String sessionId = connection.sessionId;
                     
                     // 发送停止命令
                     String command = "false";
                     byte[] commandData = SocketTools.packSFream(command);
-                    connection.outputStream.write(commandData);
-                    connection.outputStream.flush();
+                    if (connection.outputStream != null) {
+                        connection.outputStream.write(commandData);
+                        connection.outputStream.flush();
+                    }
                     
                     // 关闭连接
                     connection.isReceiving.set(false);
@@ -549,6 +750,10 @@ public class RealtimeDataService {
                     if (connection.predictionTask != null) {
                         connection.predictionTask.cancel(false);
                         log.info("停止设备 {} 的定时预测任务", deviceId);
+                    }
+                    stopAudioFallbackPush(connection);
+                    if (connection.lockHeartbeatTask != null) {
+                        connection.lockHeartbeatTask.cancel(false);
                     }
                     
                     // 停止音频接收并保存文件
@@ -598,13 +803,30 @@ public class RealtimeDataService {
                         connection.socket.close();
                     }
                     
-                    deviceConnections.remove(deviceId);
+                    deviceConnections.remove(deviceId, connection);
+                    releaseDeviceLease(deviceId, sessionId, "手动停止会话");
+                    updateCaptureSessionStatus(
+                            sessionId,
+                            "STOPPED",
+                            LocalDateTime.now(CaptureSession.ZONE_CN),
+                            null,
+                            null);
                     log.info("停止设备 {} 数据接收", deviceId);
                     return true;
                 }
+
+                // 防御性清理：会话对象不存在时也尝试清掉占用
+                releaseDeviceLease(deviceId, null, "停止请求触发孤立占用清理");
+                String staleSessionId = csvDataService.getSessionIdByDeviceId(deviceId);
+                updateCaptureSessionStatus(
+                        staleSessionId,
+                        "STOPPED",
+                        LocalDateTime.now(CaptureSession.ZONE_CN),
+                        null,
+                        null);
                 return false;
                 
-            } catch (IOException e) {
+            } catch (Exception e) {
                 log.error("停止设备数据接收失败: {}", deviceId, e);
                 return false;
             }
@@ -857,6 +1079,23 @@ public class RealtimeDataService {
      */
     private void cleanupConnection(DeviceConnection connection) {
         try {
+            connection.isReceiving.set(false);
+            connection.isConnected.set(false);
+
+            if (connection.imuWriteTask != null) {
+                connection.imuWriteTask.cancel(false);
+            }
+            if (connection.gasWriteTask != null) {
+                connection.gasWriteTask.cancel(false);
+            }
+            if (connection.predictionTask != null) {
+                connection.predictionTask.cancel(false);
+            }
+            stopAudioFallbackPush(connection);
+            if (connection.lockHeartbeatTask != null) {
+                connection.lockHeartbeatTask.cancel(false);
+            }
+
             if (connection.inputStream != null) {
                 connection.inputStream.close();
             }
@@ -866,6 +1105,16 @@ public class RealtimeDataService {
             if (connection.socket != null && !connection.socket.isClosed()) {
                 connection.socket.close();
             }
+
+            deviceConnections.remove(connection.deviceId, connection);
+            releaseDeviceLease(connection.deviceId, connection.sessionId, "连接线程退出");
+            updateCaptureSessionStatus(
+                    connection.sessionId,
+                    "FAILED",
+                    LocalDateTime.now(CaptureSession.ZONE_CN),
+                    null,
+                    null);
+            csvDataService.closeWriter(connection.deviceId);
         } catch (IOException e) {
             log.error("清理连接失败", e);
         }
@@ -935,20 +1184,100 @@ public class RealtimeDataService {
         }
         return new DeviceDataStats(deviceId, 0, 0, 0, 0);
     }
+
+    private List<String> resolveAudioRtspCandidates(DeviceConnection connection) {
+        Set<String> rawCandidates = new LinkedHashSet<>();
+
+        deviceRepository.findById(connection.deviceId)
+                .map(Device::getRtspPath)
+                .map(String::trim)
+                .filter(path -> !path.isBlank())
+                .ifPresent(rawCandidates::add);
+
+        if (audioRtspPathCandidates != null && !audioRtspPathCandidates.isBlank()) {
+            String[] configuredCandidates = audioRtspPathCandidates.split(",");
+            for (String configuredCandidate : configuredCandidates) {
+                if (configuredCandidate == null) {
+                    continue;
+                }
+                String trimmed = configuredCandidate.trim();
+                if (!trimmed.isBlank()) {
+                    rawCandidates.add(trimmed);
+                }
+            }
+        }
+
+        if (rawCandidates.isEmpty()) {
+            rawCandidates.add("/stream/audio");
+        }
+
+        Set<String> normalizedCandidates = new LinkedHashSet<>();
+        for (String candidate : rawCandidates) {
+            normalizedCandidates.add(normalizeRtspPathCandidate(candidate));
+        }
+
+        return new ArrayList<>(normalizedCandidates);
+    }
+
+    private String normalizeRtspPathCandidate(String candidate) {
+        if (candidate == null || candidate.isBlank()) {
+            return "/stream/audio";
+        }
+
+        String normalized = candidate.trim();
+        if (normalized.startsWith("rtsp://")) {
+            return normalized;
+        }
+
+        if (!normalized.startsWith("/")) {
+            normalized = "/" + normalized;
+        }
+        return normalized;
+    }
+
+    private String buildRtspUrl(String deviceIp, String pathOrUrl) {
+        String normalized = normalizeRtspPathCandidate(pathOrUrl);
+        if (normalized.startsWith("rtsp://")) {
+            return normalized;
+        }
+        return "rtsp://" + deviceIp + ":" + audioRtspPort + normalized;
+    }
     
     /**
      * 启动音频RTSP接收 - 参考原始项目的WaveFrom.play()
      */
     private void startAudioReceiving(DeviceConnection connection) {
         log.info("设备 {} 开始启动音频接收线程...", connection.deviceId);
+
+        List<String> rtspCandidates = resolveAudioRtspCandidates(connection);
+        log.info("设备 {} 音频RTSP候选路径: {}", connection.deviceId, rtspCandidates);
+
+        stopAudioFallbackPush(connection);
+        connection.audioRetryCount = 0;
+        connection.activeRtspPath = "";
+        connection.audioPushCount = 0;
+        connection.audioWsStartTimestamp = 0;
+        connection.audioWsPointCount = 0;
+        connection.audioFirstFrame = null;
+        connection.audioReady.set(false);
+        connection.audioUnavailable.set(false);
+        int maxAudioAttempts = Math.max(DeviceConnection.MAX_AUDIO_RETRY, rtspCandidates.size());
+        connection.maxAudioAttempts = maxAudioAttempts;
         
         connection.audioThread = new Thread(() -> {
-            while (connection.isConnected.get() && connection.audioRetryCount < DeviceConnection.MAX_AUDIO_RETRY) {
+            int candidateIndex = 0;
+            while (connection.isConnected.get() && connection.audioRetryCount < maxAudioAttempts) {
                 boolean shouldRetry = false; // 标记是否需要重试
+                String candidatePath = rtspCandidates.get(candidateIndex % rtspCandidates.size());
+                String rtspUrl = buildRtspUrl(connection.deviceIp, candidatePath);
+                connection.activeRtspPath = candidatePath;
+
                 try {
-                    // 构建RTSP URL
-                    String rtspUrl = "rtsp://" + connection.deviceIp + ":8554/stream/audio";
-                    log.info("开始连接音频RTSP: {} (尝试 {}/{})", rtspUrl, connection.audioRetryCount + 1, DeviceConnection.MAX_AUDIO_RETRY);
+                    log.info("开始连接音频RTSP: {} (path={}, 尝试 {}/{})",
+                            rtspUrl,
+                            candidatePath,
+                            connection.audioRetryCount + 1,
+                            maxAudioAttempts);
                     
                     // 创建FFmpeg音频抓取器
                     connection.audioGrabber = FFmpegFrameGrabber.createDefault(rtspUrl);
@@ -957,6 +1286,9 @@ public class RealtimeDataService {
                     connection.audioGrabber.start();
                     
                     connection.audioReceiving.set(true);
+                    connection.audioPushCount = 0;
+                    connection.audioWsStartTimestamp = 0;
+                    connection.audioWsPointCount = 0;
                     log.info("音频RTSP连接成功: {}", rtspUrl);
                     
                     // 获取第一帧并保存
@@ -973,9 +1305,6 @@ public class RealtimeDataService {
                             log.info("设备 {} 音频数据就绪", connection.deviceId);
                             checkAndStartRecording(connection);
                         }
-                        
-                        // 重置重试计数
-                        connection.audioRetryCount = 0;
                         
                         // 持续接收音频帧
                         while (connection.audioReceiving.get() && !Thread.currentThread().isInterrupted()) {
@@ -1003,7 +1332,7 @@ public class RealtimeDataService {
                     
                 } catch (Exception e) {
                     log.error("设备 {} 音频接收异常 (尝试 {}/{}): {}", 
-                            connection.deviceId, connection.audioRetryCount + 1, DeviceConnection.MAX_AUDIO_RETRY, e.getMessage());
+                            connection.deviceId, connection.audioRetryCount + 1, maxAudioAttempts, e.getMessage());
                     shouldRetry = true; // 异常情况，需要重试
                 }
                 
@@ -1011,10 +1340,11 @@ public class RealtimeDataService {
                 if (shouldRetry && connection.isConnected.get()) {
                     log.debug("设备 {} 准备重试，清理音频资源", connection.deviceId);
                     cleanupAudioResources(connection);
-                    
-                    // 如果还在连接状态且未达到最大重试次数，则重试
-                    if (connection.audioRetryCount < DeviceConnection.MAX_AUDIO_RETRY) {
-                        connection.audioRetryCount++;
+
+                    connection.audioRetryCount++;
+                    candidateIndex++;
+
+                    if (connection.audioRetryCount < maxAudioAttempts) {
                         try {
                             log.info("设备 {} 等待0.5秒后重试音频连接...", connection.deviceId);
                             Thread.sleep(500);
@@ -1022,8 +1352,6 @@ public class RealtimeDataService {
                             log.info("设备 {} 音频重试被中断", connection.deviceId);
                             break;
                         }
-                    } else {
-                        break;
                     }
                 } else {
                     // 正常停止或用户主动停止，不清理资源，保留录制器用于后续保存
@@ -1033,8 +1361,16 @@ public class RealtimeDataService {
             }
             
             // 达到最大重试次数
-            if (connection.audioRetryCount >= DeviceConnection.MAX_AUDIO_RETRY) {
-                log.error("设备 {} 音频连接失败，已达到最大重试次数 {}", connection.deviceId, DeviceConnection.MAX_AUDIO_RETRY);
+            if (connection.audioRetryCount >= maxAudioAttempts) {
+                connection.audioUnavailable.set(true);
+                log.error("设备 {} 音频连接失败，已达到最大重试次数 {}，候选路径={}，最后尝试路径={}，设备配置rtspPath={} ",
+                        connection.deviceId,
+                        maxAudioAttempts,
+                        rtspCandidates,
+                        connection.activeRtspPath,
+                        deviceRepository.findById(connection.deviceId).map(Device::getRtspPath).orElse(""));
+                log.warn("设备 {} 进入降级模式：继续保存IMU/GAS并使用静音音频触发预测", connection.deviceId);
+                startAudioFallbackPush(connection);
             }
         });
         connection.audioThread.setDaemon(true);
@@ -1050,6 +1386,10 @@ public class RealtimeDataService {
     private void cleanupAudioResources(DeviceConnection connection) {
         try {
             connection.audioReceiving.set(false);
+            connection.audioWsStartTimestamp = 0;
+            connection.audioWsPointCount = 0;
+            connection.audioPushCount = 0;
+            connection.audioFirstFrame = null;
             
             // 先关闭抓取器（停止接收新数据）
             if (connection.audioGrabber != null) {
@@ -1082,6 +1422,40 @@ public class RealtimeDataService {
         } catch (Exception e) {
             log.error("清理音频资源异常", e);
         }
+    }
+
+    private void startAudioFallbackPush(DeviceConnection connection) {
+        if (connection.audioFallbackTask != null && !connection.audioFallbackTask.isCancelled()) {
+            return;
+        }
+
+        connection.audioFallbackStartTimestamp = System.currentTimeMillis();
+        connection.audioFallbackPointCount = 0;
+        connection.audioFallbackTask = csvWriteScheduler.scheduleAtFixedRate(() -> {
+            try {
+                if (!connection.isConnected.get()) {
+                    return;
+                }
+
+                long timestamp = connection.audioFallbackStartTimestamp + connection.audioFallbackPointCount * 50L;
+                connection.audioFallbackPointCount++;
+                webSocketService.pushAudioData(connection.deviceId, timestamp, 0.0f);
+            } catch (Exception e) {
+                log.debug("设备 {} 推送降级音频基线失败: {}", connection.deviceId, e.getMessage());
+            }
+        }, 0, 50, TimeUnit.MILLISECONDS);
+
+        log.warn("设备 {} 音频RTSP不可用，开始推送静音基线到前端", connection.deviceId);
+    }
+
+    private void stopAudioFallbackPush(DeviceConnection connection) {
+        if (connection.audioFallbackTask != null) {
+            connection.audioFallbackTask.cancel(false);
+            connection.audioFallbackTask = null;
+            log.info("停止设备 {} 的音频基线推送定时器", connection.deviceId);
+        }
+        connection.audioFallbackStartTimestamp = 0;
+        connection.audioFallbackPointCount = 0;
     }
     
     /**
@@ -1205,6 +1579,16 @@ public class RealtimeDataService {
             if (frame.samples == null || frame.samples.length == 0) {
                 return;
             }
+
+            int sampleRate = 48000;
+            if (connection.audioGrabber != null && connection.audioGrabber.getSampleRate() > 0) {
+                sampleRate = connection.audioGrabber.getSampleRate();
+            }
+            double pointIntervalMs = (double) DeviceConnection.AUDIO_DOWNSAMPLE_RATIO * 1000.0 / sampleRate;
+            if (connection.audioWsStartTimestamp <= 0) {
+                connection.audioWsStartTimestamp = System.currentTimeMillis();
+                connection.audioWsPointCount = 0;
+            }
             
             // 获取第一个声道的数据
             java.nio.Buffer buffer = frame.samples[0];
@@ -1222,7 +1606,9 @@ public class RealtimeDataService {
                         // Short值范围是-32768到32767，转换为-1.0到1.0的浮点数
                         short shortValue = shortBuffer.get(i);
                         float amplitude = shortValue / 32768.0f;
-                        long timestamp = System.currentTimeMillis();
+                        long timestamp = connection.audioWsStartTimestamp
+                                + Math.round(connection.audioWsPointCount * pointIntervalMs);
+                        connection.audioWsPointCount++;
                         webSocketService.pushAudioData(connection.deviceId, timestamp, amplitude);
                     }
                 }
@@ -1236,7 +1622,9 @@ public class RealtimeDataService {
                     connection.audioPushCount++;
                     if (connection.audioPushCount % DeviceConnection.AUDIO_DOWNSAMPLE_RATIO == 0) {
                         float amplitude = floatBuffer.get(i);
-                        long timestamp = System.currentTimeMillis();
+                        long timestamp = connection.audioWsStartTimestamp
+                                + Math.round(connection.audioWsPointCount * pointIntervalMs);
+                        connection.audioWsPointCount++;
                         webSocketService.pushAudioData(connection.deviceId, timestamp, amplitude);
                     }
                 }
@@ -1257,6 +1645,7 @@ public class RealtimeDataService {
     private void stopAudioReceiving(DeviceConnection connection) {
         try {
             log.info("开始停止设备 {} 的音频接收...", connection.deviceId);
+            stopAudioFallbackPush(connection);
             
             // 1. 先标记停止接收，让音频线程停止抓取新帧
             connection.audioReceiving.set(false);
@@ -1367,8 +1756,8 @@ public class RealtimeDataService {
                     connection.audioReady.get(),
                     connection.allDataReady.get());
                 
-                if (connection.audioRetryCount >= DeviceConnection.MAX_AUDIO_RETRY) {
-                    log.warn("原因: 音频连接失败次数超过最大重试次数 {}", DeviceConnection.MAX_AUDIO_RETRY);
+                if (connection.audioUnavailable.get()) {
+                    log.warn("原因: 音频连接失败次数达到重试上限 {}，已进入降级模式", connection.maxAudioAttempts);
                 } else if (!connection.audioReady.get()) {
                     log.warn("原因: 音频数据未就绪 - 可能是RTSP连接失败或未抓取到音频帧");
                 } else if (!connection.allDataReady.get()) {

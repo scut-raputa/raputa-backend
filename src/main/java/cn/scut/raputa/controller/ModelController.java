@@ -28,6 +28,20 @@ public class ModelController {
         return ApiResponse.ok(new PageWrap<>(pg.getContent(), pg.getTotalElements()));
     }
 
+    @GetMapping("/runtime-list")
+    public ApiResponse<?> runtimeList(
+            @RequestParam(required = false) String name,
+            @RequestParam(required = false) String taskType,
+            @RequestParam(required = false) Boolean loaded,
+            @RequestParam(required = false) Boolean available) {
+        return ApiResponse.ok(modelService.runtimeList(name, taskType, loaded, available));
+    }
+
+    @GetMapping("/runtime-summary")
+    public ApiResponse<?> runtimeSummary() {
+        return ApiResponse.ok(modelService.runtimeSummary());
+    }
+
     @GetMapping("/stats")
     public ApiResponse<?> stats() {
         return ApiResponse.ok(modelService.stats());

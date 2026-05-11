@@ -8,7 +8,7 @@ spring:
   datasource:
     url: jdbc:mysql://127.0.0.1:3306/raputa?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
     username: root
-    password: 123456
+    password: 12345678
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   jpa:
@@ -27,7 +27,26 @@ security:
 
 raputa:
   storage:
-    tmp-dir: /tmp/raputa/tmp
+    root: ${RAPUTA_STORAGE_ROOT:/tmp/raputa/storage}
+    tmp-dir: ${RAPUTA_TMP_DIR:/tmp/raputa/tmp}
+  inference:
+    base-url: ${RAPUTA_INFERENCE_BASE_URL:http://127.0.0.1:8000}
+    connect-timeout-ms: 3000
+    read-timeout-ms: 15000
+    live-path: /health/live
+    ready-path: /health/ready
+    models-path: /models
+    upload-predict-path: /upload_predict/
+    health-check-interval-seconds: 10
+  model:
+    runtime-cache-ttl-seconds: 10
+  device-lock:
+    ttl-seconds: 45
+    heartbeat-interval-seconds: 15
+    cleaner-interval-seconds: 30
+  realtime:
+    audio-rtsp-port: ${RAPUTA_AUDIO_RTSP_PORT:8554}
+    audio-rtsp-path-candidates: ${RAPUTA_AUDIO_RTSP_PATH_CANDIDATES:/stream/audio,/audio,/live/audio,/stream,/live,/mic}
 
 # SpringDoc OpenAPI 配置
 springdoc:

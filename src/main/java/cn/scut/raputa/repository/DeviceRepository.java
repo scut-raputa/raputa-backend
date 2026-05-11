@@ -2,10 +2,10 @@ package cn.scut.raputa.repository;
 
 import cn.scut.raputa.entity.Device;
 import org.springframework.data.jpa.repository.*;
-import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+import java.util.Optional;
 
 @Repository
 public interface DeviceRepository extends JpaRepository<Device, String>, JpaSpecificationExecutor<Device> {
@@ -14,4 +14,10 @@ public interface DeviceRepository extends JpaRepository<Device, String>, JpaSpec
            "WHERE d.storageLocation IS NOT NULL AND d.storageLocation <> '' " +
            "ORDER BY d.storageLocation")
     List<String> findDistinctStorageLocations();
+
+    List<Device> findByEnabledTrueOrderByUpdatedAtDesc();
+
+    Optional<Device> findFirstByEnabledTrueAndStatusOrderByUpdatedAtDesc(String status);
+
+    Optional<Device> findFirstByIp(String ip);
 }

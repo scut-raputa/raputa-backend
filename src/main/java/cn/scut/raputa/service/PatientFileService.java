@@ -10,7 +10,11 @@ import cn.scut.raputa.vo.PatientFilesOverviewVO;
 
 public interface PatientFileService {
     // 写入一条记录
-    void record(String patientId, String absolutePath, String fileType, LocalDateTime savedAt);
+    void record(String patientId, String sessionId, String absolutePath, String fileType, LocalDateTime savedAt);
+
+    default void record(String patientId, String absolutePath, String fileType, LocalDateTime savedAt) {
+        record(patientId, null, absolutePath, fileType, savedAt);
+    }
 
     // 概览（把所有患者都返回，哪怕没有记录）
     List<PatientFilesOverviewVO> overview(
@@ -24,4 +28,6 @@ public interface PatientFileService {
         LocalDate date, List<String> patientIds,
         List<String> fileTypes, String fileNameLike
     );
+
+    List<PatientFile> listByIds(List<String> fileIds);
 }

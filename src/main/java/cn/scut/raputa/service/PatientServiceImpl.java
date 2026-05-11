@@ -13,16 +13,18 @@ import org.springframework.data.domain.*;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.util.StringUtils;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 
 @Service
 @RequiredArgsConstructor
 public class PatientServiceImpl implements PatientService {
 
     private final PatientRepository patientRepository;
+    private static final int[] ID_CARD_WEIGHTS = {7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2};
+    private static final char[] ID_CARD_CHECKSUM = {'1', '0', 'X', '9', '8', '7', '6', '5', '4', '3', '2'};
 
     @Override
     public Page<PatientVO> page(int page, int size,
@@ -58,6 +60,11 @@ public class PatientServiceImpl implements PatientService {
             throw new BizException(400, "性别仅支持：男 / 女");
         }
 
+        String idCard = dto.getIdCard() == null ? null : dto.getIdCard().trim();
+        if (!isValidMainlandIdCard(idCard)) {
+            throw new BizException(400, "请输入有效的中国大陆居民身份证号");
+        }
+
         LocalDate today = LocalDate.now();
         String datePart = today.format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
         long seq = patientRepository.countByAdmit(today) + 1;
@@ -77,7 +84,7 @@ public class PatientServiceImpl implements PatientService {
         p.setAdmit(today);
         p.setCourse(dto.getCourse().trim());
         p.setOnsetDate(dto.getOnsetDate());
-        p.setIdCard(dto.getIdCard().trim());
+        p.setIdCard(idCard);
         p.setPastHistory(dto.getPastHistory().trim());
         p.setBedNumber(dto.getBedNumber().trim());
 
@@ -93,10 +100,15 @@ public class PatientServiceImpl implements PatientService {
                 .orElseThrow(() -> new BizException(404, "患者不存在"));
 
 
+        String idCard = dto.getIdCard() == null ? null : dto.getIdCard().trim();
+        if (!isValidMainlandIdCard(idCard)) {
+            throw new BizException(400, "请输入有效的中国大陆居民身份证号");
+        }
+
         // 更新字段
         p.setName(dto.getName().trim());
         p.setGender(dto.getGender());
-        p.setIdCard(dto.getIdCard() == null ? null : dto.getIdCard().trim());
+        p.setIdCard(idCard);
         p.setDept(dto.getDept().trim());
         p.setOnsetDate(dto.getOnsetDate());
         p.setPastHistory(dto.getPastHistory() == null ? null : dto.getPastHistory().trim());
@@ -152,6 +164,27 @@ public class PatientServiceImpl implements PatientService {
         }
 
         return patientRepository.save(p);
+    }
+
+    private boolean isValidMainlandIdCard(String idCard) {
+        if (idCard == null || !idCard.matches("^[1-9]\\d{5}(18|19|20)\\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\\d|3[01])\\d{3}[0-9Xx]$")) {
+            return false;
+        }
+
+        String upper = idCard.toUpperCase();
+        String birthday = upper.substring(6, 14);
+        try {
+            LocalDate.parse(birthday, DateTimeFormatter.BASIC_ISO_DATE);
+        } catch (DateTimeParseException ex) {
+            return false;
+        }
+
+        int sum = 0;
+        for (int i = 0; i < 17; i++) {
+            sum += (upper.charAt(i) - '0') * ID_CARD_WEIGHTS[i];
+        }
+        char expected = ID_CARD_CHECKSUM[sum % 11];
+        return upper.charAt(17) == expected;
     }
 
 

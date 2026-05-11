@@ -2,7 +2,6 @@ package cn.scut.raputa.service;
 
 import cn.scut.raputa.dto.PatientCreateDTO;
 import cn.scut.raputa.vo.PatientVO;
-import jakarta.validation.constraints.NotBlank;
 import org.springframework.data.domain.Page;
 
 import java.time.LocalDate;

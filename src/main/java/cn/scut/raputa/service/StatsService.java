@@ -2,8 +2,10 @@ package cn.scut.raputa.service;
 
 import cn.scut.raputa.dto.StatsDTO;
 import cn.scut.raputa.entity.CheckRecord;
+import cn.scut.raputa.entity.CaptureSession;
 import cn.scut.raputa.entity.Patient;
 import cn.scut.raputa.enums.CheckResult;
+import cn.scut.raputa.repository.CaptureSessionRepository;
 import cn.scut.raputa.repository.CheckRecordRepository;
 import cn.scut.raputa.repository.PatientFileRepository;
 import cn.scut.raputa.repository.PatientRepository;
@@ -29,6 +31,7 @@ public class StatsService {
     private final CheckRecordRepository checkRecordRepository;
     private final PatientRepository patientRepository;
     private final PatientFileRepository patientFileRepository;
+    private final CaptureSessionRepository captureSessionRepository;
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final String[] WEEKDAYS = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
@@ -178,16 +181,25 @@ public class StatsService {
         List<Object[]> deviceUsageData = patientFileRepository.findDeviceUsageStats(
             startDateTime, endDateTime);
 
+        Set<String> sessionIds = deviceUsageData.stream()
+            .map(row -> (String) row[0])
+            .filter(Objects::nonNull)
+            .filter(s -> !s.isBlank())
+            .collect(Collectors.toSet());
+
+        Map<String, String> sessionToDevice = captureSessionRepository.findAllById(sessionIds).stream()
+            .filter(session -> session.getDeviceId() != null && !session.getDeviceId().isBlank())
+            .collect(Collectors.toMap(CaptureSession::getId, CaptureSession::getDeviceId, (a, b) -> a));
+
         // 按设备ID和日期分组统计使用时长
         Map<String, Map<LocalDate, Double>> usageByDeviceAndDate = new HashMap<>();
 
         for (Object[] row : deviceUsageData) {
-            String sessionKey = (String) row[0];
+            String sessionId = (String) row[0];
             LocalDateTime savedAt = (LocalDateTime) row[1];
             Long fileCount = (Long) row[2];
 
-            // 从sessionKey中提取设备ID (假设格式为: deviceId_timestamp)
-            String deviceId = extractDeviceIdFromSessionKey(sessionKey);
+            String deviceId = sessionToDevice.getOrDefault(sessionId, "UNKNOWN");
             LocalDate date = savedAt.toLocalDate();
 
             // 估算使用时长: 每个文件约代表0.5小时的使用
@@ -220,23 +232,6 @@ public class StatsService {
         result.sort(Comparator.comparing(StatsDTO.DeviceUsage::getDeviceId));
 
         return result;
-    }
-
-    /**
-     * 从sessionKey中提取设备ID
-     */
-    private String extractDeviceIdFromSessionKey(String sessionKey) {
-        if (sessionKey == null || sessionKey.isEmpty()) {
-            return "UNKNOWN";
-        }
-
-        // sessionKey格式可能是: deviceId_timestamp 或 deviceId
-        int underscoreIndex = sessionKey.indexOf('_');
-        if (underscoreIndex > 0) {
-            return sessionKey.substring(0, underscoreIndex);
-        }
-
-        return sessionKey;
     }
 
     /**

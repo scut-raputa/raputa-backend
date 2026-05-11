@@ -1,5 +1,8 @@
 package cn.scut.raputa.service;
 
+import cn.scut.raputa.entity.CaptureSession;
+import cn.scut.raputa.exception.BizException;
+import cn.scut.raputa.repository.CaptureSessionRepository;
 import com.opencsv.CSVWriter;
 
 import lombok.RequiredArgsConstructor;
@@ -30,8 +33,9 @@ import java.util.concurrent.ConcurrentHashMap;
 public class CsvDataService {
 
     private final PatientFileService patientFileService;
+    private final CaptureSessionRepository captureSessionRepository;
+    private final FileStorageService fileStorageService;
     
-    private static final String CSV_DIRECTORY = "D:/health_plat_bk/data";
     private static final DateTimeFormatter FILE_NAME_FORMATTER = DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss");
     
     // 存储每个设备的文件路径和CSVWriter
@@ -40,6 +44,8 @@ public class CsvDataService {
     
     // 存储每个设备的会话文件夹路径
     private final ConcurrentHashMap<String, String> sessionFolders = new ConcurrentHashMap<>();
+
+    private final ConcurrentHashMap<String, String> deviceSessionIds = new ConcurrentHashMap<>();
     
     private final ConcurrentHashMap<String, String> sessionPatientIds   = new ConcurrentHashMap<>();
     private final ConcurrentHashMap<String, String> sessionPatientNames = new ConcurrentHashMap<>();
@@ -47,7 +53,11 @@ public class CsvDataService {
 
     //取出CSV文件路径目录
     public String getCsvDirectory() {
-        return CSV_DIRECTORY;
+        return fileStorageService.getStorageRootPath().toString();
+    }
+
+    public String getSessionIdByDeviceId(String deviceId) {
+        return deviceSessionIds.get(deviceId);
     }
 
     // >>> 新增：会话元信息只读访问（供 RealtimeDataService.stop 使用）
@@ -68,15 +78,28 @@ public class CsvDataService {
         return sessionFolders.get(deviceId);
     }
 
-    public void setSessionMeta(String deviceId, String patientId, String patientName, String deviceName) {
+    public void setSessionMeta(
+            String deviceId,
+            String patientId,
+            String patientName,
+            String deviceName,
+            String sessionId,
+            String sessionDir) {
         sessionPatientIds.put(deviceId, patientId == null ? "" : patientId.trim());
         sessionPatientNames.put(deviceId, patientName == null ? "" : patientName.trim());
         sessionDeviceNames.put(deviceId, deviceName == null ? "" : deviceName.trim());
+        if (sessionId != null && !sessionId.isBlank()) {
+            deviceSessionIds.put(deviceId, sessionId);
+        }
         
-        // 创建会话文件夹: 患者id_患者姓名_时间戳
-        String folderName = generateSessionFolderName(deviceId);
         try {
-            Path folderPath = Paths.get(CSV_DIRECTORY, folderName);
+            Path folderPath;
+            if (sessionDir != null && !sessionDir.isBlank()) {
+                folderPath = fileStorageService.resolveSessionDir(sessionDir);
+            } else {
+                String folderName = generateSessionFolderName(deviceId);
+                folderPath = fileStorageService.getStorageRootPath().resolve(folderName);
+            }
             if (!Files.exists(folderPath)) {
                 Files.createDirectories(folderPath);
             }
@@ -199,7 +222,7 @@ public class CsvDataService {
         if (sessionFolder == null) {
             // 如果没有会话文件夹，创建一个默认的
             String folderName = generateSessionFolderName(deviceId);
-            Path folderPath = Paths.get(CSV_DIRECTORY, folderName);
+            Path folderPath = fileStorageService.getStorageRootPath().resolve(folderName);
             if (!Files.exists(folderPath)) {
                 Files.createDirectories(folderPath);
             }
@@ -260,41 +283,54 @@ public class CsvDataService {
      * 然后清理会话元信息。
      */
     public void finalizeSessionFiles(String deviceId) {
-        String sessionFolder = sessionFolders.get(deviceId);
-        String patientId = sessionPatientIds.getOrDefault(deviceId, "unknown");
+        String sessionId = deviceSessionIds.get(deviceId);
+        if (sessionId == null || sessionId.isBlank()) {
+            throw new BizException(400, "当前设备不存在可 finalize 的会话");
+        }
+        finalizeSessionFilesBySessionId(sessionId);
+        cleanupDeviceSessionMapping(deviceId);
+    }
 
-        if (sessionFolder == null || "unknown".equals(patientId)) {
-            log.warn("无法 finalize 会话: deviceId={}, sessionFolder={}, patientId={}",
-                    deviceId, sessionFolder, patientId);
+    public void finalizeSessionFilesBySessionId(String sessionId) {
+        CaptureSession session = captureSessionRepository.findById(sessionId)
+                .orElseThrow(() -> new BizException(404, "会话不存在: " + sessionId));
+
+        if (session.getFinalizedAt() != null) {
+            log.info("会话已 finalize，跳过重复执行: sessionId={}", sessionId);
             return;
         }
 
-        Path folder = Paths.get(sessionFolder);
+        if (session.getSessionDir() == null || session.getSessionDir().isBlank()) {
+            throw new BizException(400, "会话目录缺失，无法 finalize");
+        }
+        if (session.getPatientId() == null || session.getPatientId().isBlank()) {
+            throw new BizException(400, "会话缺少 patientId，无法 finalize");
+        }
 
-        // 统一登记这三类文件（存在才登记，不存在就跳过）
-        registerFileIfExists(patientId, folder.resolve("imu.csv"), "csv");
-        registerFileIfExists(patientId, folder.resolve("gas.csv"), "csv");
-        registerFileIfExists(patientId, folder.resolve("audio.wav"), "wav");
+        Path folder = fileStorageService.resolveSessionDir(session.getSessionDir());
+        registerFileIfExists(session.getPatientId(), sessionId, folder.resolve("imu.csv"), "csv");
+        registerFileIfExists(session.getPatientId(), sessionId, folder.resolve("gas.csv"), "csv");
+        registerFileIfExists(session.getPatientId(), sessionId, folder.resolve("audio.wav"), "wav");
 
-        // 如果将来你想把这些文件从“临时目录”移到“正式目录”，可以在这里做 move
+        session.setStatus("FINALIZED");
+        session.setFinalizedAt(LocalDateTime.now(CaptureSession.ZONE_CN));
+        captureSessionRepository.save(session);
 
-        // 清理会话元信息 —— 这次检测已经“定案”
-        sessionFolders.remove(deviceId);
-        sessionPatientIds.remove(deviceId);
-        sessionPatientNames.remove(deviceId);
-        sessionDeviceNames.remove(deviceId);
-
-        log.info("会话文件已登记为正式记录并清理元信息: deviceId={}, folder={}", deviceId, sessionFolder);
+        if (session.getDeviceId() != null && !session.getDeviceId().isBlank()) {
+            cleanupDeviceSessionMapping(session.getDeviceId());
+        }
+        log.info("会话 finalize 完成: sessionId={}, folder={}", sessionId, folder);
     }
 
     /**
      * 辅助：文件存在才登记到 PatientFile
      */
-    private void registerFileIfExists(String patientId, Path path, String ext) {
+    private void registerFileIfExists(String patientId, String sessionId, Path path, String ext) {
         try {
             if (Files.exists(path)) {
                 patientFileService.record(
                         patientId,
+                        sessionId,
                         path.toAbsolutePath().toString(),
                         ext,
                         LocalDateTime.now());
@@ -307,20 +343,31 @@ public class CsvDataService {
         }
     }
 
+    private void cleanupDeviceSessionMapping(String deviceId) {
+        if (deviceId == null || deviceId.isBlank()) {
+            return;
+        }
+        deviceSessionIds.remove(deviceId);
+        sessionFolders.remove(deviceId);
+        sessionPatientIds.remove(deviceId);
+        sessionPatientNames.remove(deviceId);
+        sessionDeviceNames.remove(deviceId);
+    }
+
     
     /**
      * 获取CSV文件列表
      */
     public List<String> getCsvFileList() {
         try {
-            Path directory = Paths.get(CSV_DIRECTORY);
+            Path directory = fileStorageService.getStorageRootPath();
             if (!Files.exists(directory)) {
                 return new ArrayList<>();
             }
             
-            return Files.list(directory)
+            return Files.walk(directory)
                     .filter(path -> path.toString().endsWith(".csv"))
-                    .map(path -> path.getFileName().toString())
+                    .map(path -> fileStorageService.toRelativePath(path))
                     .sorted()
                     .toList();
                     
@@ -335,7 +382,7 @@ public class CsvDataService {
      */
     public boolean deleteCsvFile(String fileName) {
         try {
-            Path filePath = Paths.get(CSV_DIRECTORY, fileName);
+            Path filePath = fileStorageService.getStorageRootPath().resolve(fileName).normalize();
             return Files.deleteIfExists(filePath);
         } catch (IOException e) {
             log.error("删除CSV文件失败: {}", fileName, e);

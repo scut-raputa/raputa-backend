@@ -29,8 +29,8 @@ public class PatientFilesOverviewVO {
     @Getter @Setter
     @NoArgsConstructor @AllArgsConstructor
     public static class FileItem {
+        private String id;               // 文件ID（下载用）
         private String name;              // 文件名（不含路径）
         private String type;              // csv/wav/pdf
-        private String path;              // 绝对路径（下载用）
     }
 }

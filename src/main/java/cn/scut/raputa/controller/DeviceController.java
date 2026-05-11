@@ -54,6 +54,25 @@ public class DeviceController {
         return ApiResponse.ok(deviceService.toggleStatus(id));
     }
 
+    @GetMapping("/registry")
+    public ApiResponse<?> registry(@RequestParam(defaultValue = "false") boolean onlineOnly) {
+        return ApiResponse.ok(deviceService.registry(onlineOnly));
+    }
+
+    @PostMapping("/{id}/force-release")
+    public ApiResponse<?> forceRelease(@PathVariable String id) {
+        boolean released = deviceService.forceRelease(id);
+        return ApiResponse.ok(released);
+    }
+
+    @PostMapping("/manual-connect")
+    public ApiResponse<?> manualConnect(@RequestBody ManualDeviceReq req) {
+        return ApiResponse.ok(deviceService.upsertManualDevice(req.ip(), req.name()));
+    }
+
     public record PageWrap<T>(java.util.List<T> items, long total) {
+    }
+
+    public record ManualDeviceReq(String ip, String name) {
     }
 }

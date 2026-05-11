@@ -1,7 +1,6 @@
 package cn.scut.raputa.controller;
 
 import cn.scut.raputa.dto.PatientCreateDTO;
-import cn.scut.raputa.dto.PatientUpdateDTO;
 import cn.scut.raputa.response.ApiResponse;
 import cn.scut.raputa.service.PatientService;
 import cn.scut.raputa.vo.PatientVO;

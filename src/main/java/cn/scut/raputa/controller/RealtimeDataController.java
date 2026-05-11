@@ -1,5 +1,6 @@
 package cn.scut.raputa.controller;
 
+import cn.scut.raputa.dto.RealtimeConnectResultDTO;
 import cn.scut.raputa.entity.AudioData;
 import cn.scut.raputa.entity.GasData;
 import cn.scut.raputa.entity.ImuData;
@@ -46,7 +47,7 @@ public class RealtimeDataController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "400", description = "请求参数错误"),
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "500", description = "服务器内部错误")
     })
-    public CompletableFuture<ResponseEntity<ApiResponse<Boolean>>> connectDevice(
+    public CompletableFuture<ResponseEntity<ApiResponse<RealtimeConnectResultDTO>>> connectDevice(
             @io.swagger.v3.oas.annotations.parameters.RequestBody(
                 description = "连接入参：设备信息 + 患者编号/姓名，用于CSV文件命名",
                 required = true
@@ -57,7 +58,7 @@ public class RealtimeDataController {
         if (req.deviceIp() == null || req.deviceIp().isBlank()
                 || req.deviceId() == null || req.deviceId().isBlank()) {
             return CompletableFuture.completedFuture(
-                ResponseEntity.ok(ApiResponse.<Boolean>error(400, "deviceIp 和 deviceId 为必填"))
+                ResponseEntity.ok(ApiResponse.<RealtimeConnectResultDTO>error(400, "deviceIp 和 deviceId 为必填"))
             );
         }
 
@@ -71,12 +72,17 @@ public class RealtimeDataController {
                                     req.deviceName(),
                                     req.patientId(),
                                     req.patientName())
-                .thenApply(success -> success
-                        ? ResponseEntity.ok(ApiResponse.ok(true, "设备连接成功，开始接收数据"))
-                        : ResponseEntity.ok(ApiResponse.<Boolean>error(500, "设备连接失败")))
+                .thenApply(result -> {
+                    String message = result.isSuccess()
+                            ? "设备连接成功，开始接收数据"
+                            : (result.getReason() == null || result.getReason().isBlank()
+                                    ? "设备连接失败"
+                                    : result.getReason());
+                    return ResponseEntity.ok(ApiResponse.ok(result, message));
+                })
                 .exceptionally(throwable -> {
                     log.error("连接设备异常", throwable);
-                    return ResponseEntity.ok(ApiResponse.<Boolean>error(500, "连接设备异常: " + throwable.getMessage()));
+                    return ResponseEntity.ok(ApiResponse.<RealtimeConnectResultDTO>error(500, "连接设备异常: " + throwable.getMessage()));
                 });
     }
     // public CompletableFuture<ResponseEntity<ApiResponse<Boolean>>> connectDevice(
@@ -341,14 +347,22 @@ public class RealtimeDataController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "500", description = "服务器内部错误")
     })
     public ResponseEntity<ApiResponse<Boolean>> finalizeSession(
-            @Parameter(description = "设备ID", required = true)
-            @RequestParam String deviceId) {
+            @Parameter(description = "会话ID", required = false)
+            @RequestParam(required = false) String sessionId,
+            @Parameter(description = "设备ID", required = false)
+            @RequestParam(required = false) String deviceId) {
 
         try {
-            csvDataService.finalizeSessionFiles(deviceId);
+            if (sessionId != null && !sessionId.isBlank()) {
+                csvDataService.finalizeSessionFilesBySessionId(sessionId);
+            } else if (deviceId != null && !deviceId.isBlank()) {
+                csvDataService.finalizeSessionFiles(deviceId);
+            } else {
+                return ResponseEntity.ok(ApiResponse.error(400, "sessionId 或 deviceId 至少提供一个"));
+            }
             return ResponseEntity.ok(ApiResponse.ok(true, "会话文件已登记为正式记录"));
         } catch (Exception e) {
-            log.error("finalize 会话失败: deviceId={}", deviceId, e);
+            log.error("finalize 会话失败: sessionId={}, deviceId={}", sessionId, deviceId, e);
             return ResponseEntity.ok(ApiResponse.<Boolean>error(500, "会话文件登记失败: " + e.getMessage()));
         }
     }

@@ -19,4 +19,10 @@ public interface DeviceService {
     void delete(String id);
 
     DeviceVO toggleStatus(String id);
+
+    List<DeviceVO> registry(Boolean onlineOnly);
+
+    boolean forceRelease(String id);
+
+    DeviceVO upsertManualDevice(String ip, String deviceName);
 }

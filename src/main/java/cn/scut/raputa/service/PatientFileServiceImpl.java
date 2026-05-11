@@ -12,8 +12,10 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.*;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -23,34 +25,38 @@ public class PatientFileServiceImpl implements PatientFileService {
 
     private final PatientRepository patientRepository;
     private final PatientFileRepository patientFileRepository;
+    private final FileStorageService fileStorageService;
+
+    private static final DateTimeFormatter TIME_FMT = DateTimeFormatter.ofPattern("HH:mm:ss");
 
     @Override
-    public void record(String patientId, String absolutePath, String fileType, LocalDateTime savedAt) {
-        // 解析会话目录名作为 sessionKey（…/P0001_张三_20251109_094129/imu.csv）
-        String sessionKey = extractSessionKey(absolutePath);
-        PatientFile entity = new PatientFile();
+    public void record(String patientId, String sessionId, String absolutePath, String fileType, LocalDateTime savedAt) {
+        Path normalizedPath = Path.of(absolutePath).toAbsolutePath().normalize();
+        Path storageRoot = fileStorageService.getStorageRootPath();
+        PatientFileId key = new PatientFileId(patientId, normalizedPath.toString());
 
-        PatientFileId id = new PatientFileId(patientId, absolutePath);
-        entity.setId(id);
+        PatientFile entity = patientFileRepository.findById(key).orElseGet(PatientFile::new);
+        entity.setId(key);
+        if (entity.getFileId() == null || entity.getFileId().isBlank()) {
+            entity.setFileId(UUID.randomUUID().toString().replace("-", ""));
+        }
+        entity.setSessionId(sessionId);
+        entity.setStorageRoot(storageRoot.toString());
+        entity.setRelativePath(fileStorageService.toRelativePath(normalizedPath));
+        entity.setOriginalName(resolveFileName(normalizedPath, absolutePath));
         entity.setFileType(fileType.toLowerCase());
         entity.setSavedAt(savedAt != null ? savedAt : LocalDateTime.now());
-        entity.setSessionKey(sessionKey);
+        entity.setSizeBytes(readFileSize(normalizedPath));
+        entity.setLegacyAbsolutePath(normalizedPath.toString());
 
         patientFileRepository.save(entity);
 
-        Patient patient = patientRepository.findById(patientId).orElse(null);
-        patient.setChecked(true);
-        patientRepository.save(patient);
-    }
-
-    private String extractSessionKey(String absolutePath) {
-        try {
-            Path p = Path.of(absolutePath).normalize();
-            String folder = p.getParent().getFileName().toString(); // 例：P0001_张三_20251109_094129
-            return folder;
-        } catch (Exception e) {
-            return "unknown_session";
-        }
+        patientRepository.findById(patientId).ifPresent(patient -> {
+            if (!patient.isChecked()) {
+                patient.setChecked(true);
+                patientRepository.save(patient);
+            }
+        });
     }
 
     @Override
@@ -74,7 +80,13 @@ public class PatientFileServiceImpl implements PatientFileService {
                 ps.add(root.get("fileType").in(fileTypes.stream().map(String::toLowerCase).toList()));
             }
             if (fileNameLike != null && !fileNameLike.isBlank()) {
-                ps.add(cb.like(root.get("id").get("filePath"), "%" + fileNameLike + "%"));
+                String keyword = "%" + fileNameLike + "%";
+                ps.add(cb.or(
+                        cb.like(root.get("originalName"), keyword),
+                        cb.like(root.get("relativePath"), keyword),
+                    cb.like(root.get("legacyAbsolutePath"), keyword),
+                    cb.like(root.get("id").get("filePath"), keyword)
+                ));
             }
             return ps.isEmpty() ? cb.conjunction() : cb.and(ps.toArray(new Predicate[0]));
         };
@@ -82,15 +94,15 @@ public class PatientFileServiceImpl implements PatientFileService {
 
         // 3) 拉取匹配的文件
         List<PatientFile> files = patientFileRepository.findAll(spec);
+        ensureFileIds(files);
 
-        // 4) patientId -> (date -> (timeHHmmss -> files))
+        // 4) patientId -> (date -> (sessionGroup -> files))
         Map<String, Map<LocalDate, Map<String, List<PatientFile>>>> grouped =
                 files.stream().collect(Collectors.groupingBy(
                         PatientFile::getPatientId,
                         Collectors.groupingBy(
                                 pf -> pf.getSavedAt().toLocalDate(),
-                                Collectors.groupingBy(pf -> sessionTimeFromSessionKey(pf.getSessionKey()) // "09:41:29"
-                                )
+                    Collectors.groupingBy(this::groupingSessionKey)
                         )
                 ));
 
@@ -125,17 +137,20 @@ public class PatientFileServiceImpl implements PatientFileService {
                 List<PatientFilesOverviewVO.TimeGroup> times = new ArrayList<>();
                 for (String tKey : timeKeys) {
                     List<PatientFile> fileList = timesMap.getOrDefault(tKey, Collections.emptyList());
-                    fileList.sort(Comparator.comparing(PatientFile::getFileType));
+                    fileList = fileList.stream()
+                        .sorted(Comparator.comparing(PatientFile::getFileType)
+                            .thenComparing(PatientFile::getSavedAt))
+                        .toList();
 
                     List<PatientFilesOverviewVO.FileItem> filesVo = fileList.stream()
                             .map(pf -> new PatientFilesOverviewVO.FileItem(
-                                    java.nio.file.Path.of(pf.getFilePath()).getFileName().toString(),
-                                    pf.getFileType(),
-                                    pf.getFilePath()
+                            pf.getFileId(),
+                            resolveDisplayName(pf),
+                            pf.getFileType()
                             )).toList();
 
                     PatientFilesOverviewVO.TimeGroup tg = new PatientFilesOverviewVO.TimeGroup();
-                    tg.setTime(tKey);
+                    tg.setTime(resolveGroupTime(fileList));
                     tg.setFiles(filesVo);
                     times.add(tg);
                 }
@@ -167,36 +182,108 @@ public class PatientFileServiceImpl implements PatientFileService {
                 ps.add(cb.between(root.get("savedAt"), start, end));
             }
             if (patientIds != null && !patientIds.isEmpty()) {
-                // ★ 关键：访问 EmbeddedId 要用 id.patientId
                 ps.add(root.get("id").get("patientId").in(patientIds));
             }
             if (fileTypes != null && !fileTypes.isEmpty()) {
                 ps.add(root.get("fileType").in(fileTypes.stream().map(String::toLowerCase).toList()));
             }
             if (fileNameLike != null && !fileNameLike.isBlank()) {
-                // ★ 关键：访问 EmbeddedId 要用 id.filePath
-                ps.add(cb.like(root.get("id").get("filePath"), "%" + fileNameLike + "%"));
+                String keyword = "%" + fileNameLike + "%";
+                ps.add(cb.or(
+                        cb.like(root.get("originalName"), keyword),
+                        cb.like(root.get("relativePath"), keyword),
+                        cb.like(root.get("legacyAbsolutePath"), keyword),
+                        cb.like(root.get("id").get("filePath"), keyword)
+                ));
             }
             return ps.isEmpty() ? cb.conjunction() : cb.and(ps.toArray(new Predicate[0]));
         };
         return patientFileRepository.findAll(spec);
     }
 
-    // 从 sessionKey（如 P0001_张三_20251109_094129）抽 HH:mm:ss
-    private String sessionTimeFromSessionKey(String sessionKey) {
-        if (sessionKey == null) return "00:00:00";
-        String[] parts = sessionKey.split("_");
-        if (parts.length < 3) return "00:00:00";
-        String ts = parts[parts.length - 1]; // 094129 或 20251109_094129
-        String hhmmss;
-        if (ts.length() == 6) {
-            hhmmss = ts;
-        } else if (ts.length() == "yyyyMMdd_HHmmss".length() && ts.contains("_")) {
-            hhmmss = ts.substring(ts.indexOf('_') + 1);
-        } else {
-            // 兜底：尝试从末尾 6 位取
-            hhmmss = ts.substring(Math.max(0, ts.length() - 6));
+    @Override
+    public List<PatientFile> listByIds(List<String> fileIds) {
+        if (fileIds == null || fileIds.isEmpty()) {
+            return List.of();
         }
-        return hhmmss.substring(0,2) + ":" + hhmmss.substring(2,4) + ":" + hhmmss.substring(4,6);
+        return patientFileRepository.findAllByFileIdIn(fileIds);
+    }
+
+    private String groupingSessionKey(PatientFile file) {
+        if (file.getSessionId() != null && !file.getSessionId().isBlank()) {
+            return file.getSessionId();
+        }
+        return "legacy-" + file.getSavedAt().withNano(0);
+    }
+
+    private void ensureFileIds(List<PatientFile> files) {
+        if (files == null || files.isEmpty()) {
+            return;
+        }
+        List<PatientFile> changed = new ArrayList<>();
+        for (PatientFile file : files) {
+            if (file.getFileId() == null || file.getFileId().isBlank()) {
+                file.setFileId(UUID.randomUUID().toString().replace("-", ""));
+                changed.add(file);
+            }
+        }
+        if (!changed.isEmpty()) {
+            patientFileRepository.saveAll(changed);
+        }
+    }
+
+    private String resolveGroupTime(List<PatientFile> files) {
+        if (files == null || files.isEmpty()) {
+            return "00:00:00";
+        }
+        LocalDateTime min = files.stream()
+                .map(PatientFile::getSavedAt)
+                .filter(Objects::nonNull)
+                .min(LocalDateTime::compareTo)
+                .orElse(files.get(0).getSavedAt());
+        return min == null ? "00:00:00" : min.toLocalTime().format(TIME_FMT);
+    }
+
+    private String resolveDisplayName(PatientFile file) {
+        if (file.getOriginalName() != null && !file.getOriginalName().isBlank()) {
+            return file.getOriginalName();
+        }
+        if (file.getRelativePath() != null && !file.getRelativePath().isBlank()) {
+            Path p = Path.of(file.getRelativePath());
+            Path name = p.getFileName();
+            if (name != null) {
+                return name.toString();
+            }
+        }
+        if (file.getLegacyAbsolutePath() != null && !file.getLegacyAbsolutePath().isBlank()) {
+            Path p = Path.of(file.getLegacyAbsolutePath());
+            Path name = p.getFileName();
+            if (name != null) {
+                return name.toString();
+            }
+            return file.getLegacyAbsolutePath();
+        }
+        return "unknown";
+    }
+
+    private String resolveFileName(Path path, String fallback) {
+        try {
+            Path name = path.getFileName();
+            if (name != null) {
+                return name.toString();
+            }
+        } catch (Exception ignored) {
+        }
+        return fallback;
+    }
+
+    private Long readFileSize(Path path) {
+        try {
+            if (Files.exists(path)) {
+                return Files.size(path);
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
     }
 }

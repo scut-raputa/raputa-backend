@@ -133,7 +133,13 @@ public final class VoMappers {
                 .ip(d.getIp())
                 .lastConnectedTime(d.getLastConnectedTime() == null ? null
                         : d.getLastConnectedTime().format(DTMF))
+            .lastSeenAt(d.getLastSeenAt() == null ? null
+                : d.getLastSeenAt().format(DTMF))
                 .status(d.getStatus())
+            .accessMode(d.getAccessMode())
+            .controlPort(d.getControlPort())
+            .rtspPath(d.getRtspPath())
+            .enabled(d.getEnabled())
                 .description(d.getDescription())
                 .storageLocation(d.getStorageLocation())
                 .responsible(d.getResponsible())

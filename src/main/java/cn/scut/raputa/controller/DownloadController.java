@@ -2,6 +2,8 @@
 package cn.scut.raputa.controller;
 
 import cn.scut.raputa.entity.PatientFile;
+import cn.scut.raputa.exception.BizException;
+import cn.scut.raputa.service.FileStorageService;
 import cn.scut.raputa.service.PatientFileService;
 import lombok.Data;
 import lombok.RequiredArgsConstructor;
@@ -30,11 +32,19 @@ import java.util.zip.ZipOutputStream;
 public class DownloadController {
 
     private final PatientFileService patientFileService;
+    private final FileStorageService fileStorageService;
 
-    /** 1) 单个文件下载（前端传绝对路径 path） */
+    /** 1) 单个文件下载（前端传 fileId） */
     @GetMapping("/file")
-    public void downloadSingle(@RequestParam("path") String path, HttpServletResponse resp) throws IOException {
-        Path p = Paths.get(path).normalize();
+    public void downloadSingle(@RequestParam("fileId") String fileId, HttpServletResponse resp) throws IOException {
+        PatientFile patientFile = patientFileService.listByIds(List.of(fileId)).stream()
+                .findFirst()
+                .orElseThrow(() -> new BizException(404, "文件记录不存在"));
+
+        Path p = resolveRealPath(patientFile);
+        if (p == null) {
+            throw new BizException(404, "文件路径信息不完整");
+        }
         if (!Files.exists(p) || Files.isDirectory(p)) {
             resp.setStatus(404);
             resp.setContentType("application/json;charset=UTF-8");
@@ -83,15 +93,22 @@ public class DownloadController {
 
         try (ZipOutputStream zos = new ZipOutputStream(resp.getOutputStream())) {
             int added = 0;
+            Set<String> usedNames = new HashSet<>();
             for (PatientFile pf : files) {
-                Path real = Paths.get(pf.getFilePath()).normalize();
+                Path real = resolveRealPath(pf);
+                if (real == null) {
+                    continue;
+                }
                 if (!Files.exists(real) || Files.isDirectory(real)) continue;
 
                 String date = pf.getSavedAt().toLocalDate().format(DATE);
                 String time = pf.getSavedAt().toLocalTime().format(TIME);
-                String baseName = real.getFileName().toString(); // imu.csv / gas.csv / audio.wav
+                String baseName = Optional.ofNullable(pf.getOriginalName())
+                        .filter(name -> !name.isBlank())
+                        .orElseGet(() -> real.getFileName().toString());
 
                 String entryName = pf.getPatientId() + "/" + date + "/" + time + "/" + baseName;
+                entryName = deduplicateEntryName(entryName, usedNames);
 
                 zos.putNextEntry(new ZipEntry(entryName));
                 Files.copy(real, zos);
@@ -104,6 +121,30 @@ public class DownloadController {
 
     private String urlEncode(String s) {
         return URLEncoder.encode(s, StandardCharsets.UTF_8).replaceAll("\\+", "%20");
+    }
+
+    private Path resolveRealPath(PatientFile pf) {
+        return fileStorageService.resolveStoredFile(
+                pf.getStorageRoot(),
+                pf.getRelativePath(),
+                pf.getLegacyAbsolutePath()
+        );
+    }
+
+    private String deduplicateEntryName(String entryName, Set<String> usedNames) {
+        if (usedNames.add(entryName)) {
+            return entryName;
+        }
+        int index = 1;
+        String candidate;
+        int dot = entryName.lastIndexOf('.');
+        String prefix = dot > 0 ? entryName.substring(0, dot) : entryName;
+        String suffix = dot > 0 ? entryName.substring(dot) : "";
+        do {
+            candidate = prefix + "_(" + index + ")" + suffix;
+            index++;
+        } while (!usedNames.add(candidate));
+        return candidate;
     }
 
     // ---------- 请求体 ----------

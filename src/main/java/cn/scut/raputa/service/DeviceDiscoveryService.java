@@ -2,8 +2,11 @@ package cn.scut.raputa.service;
 
 import cn.scut.raputa.dto.DeviceDiscoveryDTO;
 import cn.scut.raputa.dto.DeviceDiscoveryResponseDTO;
+import cn.scut.raputa.entity.Device;
+import cn.scut.raputa.repository.DeviceRepository;
 import cn.scut.raputa.utils.SocketTools;
 import com.fasterxml.jackson.databind.JsonNode;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -11,6 +14,7 @@ import java.io.IOException;
 import java.net.DatagramPacket;
 import java.net.DatagramSocket;
 import java.net.SocketException;
+import java.time.LocalDateTime;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -22,7 +26,10 @@ import java.util.concurrent.TimeUnit;
  */
 @Service
 @Slf4j
+@RequiredArgsConstructor
 public class DeviceDiscoveryService {
+
+    private final DeviceRepository deviceRepository;
     
     private volatile boolean isDiscovering = false;
     private DatagramSocket udpSocket = null;
@@ -36,8 +43,8 @@ public class DeviceDiscoveryService {
     public CompletableFuture<DeviceDiscoveryResponseDTO> startDeviceDiscovery(DeviceDiscoveryDTO request) {
         if (isDiscovering) {
             return CompletableFuture.completedFuture(
-                new DeviceDiscoveryResponseDTO(null, null, "DISCOVERING", 
-                    System.currentTimeMillis(), "设备发现已在进行中")
+                new DeviceDiscoveryResponseDTO(null, null, null, "DISCOVERING", 
+                    System.currentTimeMillis(), "设备发现已在进行中", null)
             );
         }
         
@@ -120,13 +127,23 @@ public class DeviceDiscoveryService {
                                 if (nameNode != null && !nameNode.isNull()) {
                                     deviceName = nameNode.asText();
                                 }
+
+                                Device discoveredDevice = upsertDiscoveredDevice(deviceIp, deviceName);
+                                String discoveredDeviceId = discoveredDevice != null
+                                        ? discoveredDevice.getId()
+                                        : inferDiscoveredId(deviceIp);
+                                String discoveredRtspPath = discoveredDevice != null
+                                        ? discoveredDevice.getRtspPath()
+                                        : "/stream/audio";
                                 
                                 return new DeviceDiscoveryResponseDTO(
+                                    discoveredDeviceId,
                                     deviceIp,
                                     deviceName,
                                     "ONLINE",
                                     System.currentTimeMillis(),
-                                    dataString
+                                    dataString,
+                                    discoveredRtspPath
                                 );
                             }
                         }
@@ -146,22 +163,18 @@ public class DeviceDiscoveryService {
                 }
             }
             
-            return new DeviceDiscoveryResponseDTO(
-                null,
-                null,
-                "NOT_FOUND",
-                System.currentTimeMillis(),
-                "未发现设备，请检查网络连接"
-            );
+            return staticFallbackResponse();
                 
         } catch (SocketException e) {
             log.error("创建UDP Socket失败", e);
             return new DeviceDiscoveryResponseDTO(
                 null,
                 null,
+                null,
                 "ERROR",
                 System.currentTimeMillis(),
-                "网络错误: " + e.getMessage()
+                "网络错误: " + e.getMessage(),
+                null
             );
         }
     }
@@ -174,5 +187,85 @@ public class DeviceDiscoveryService {
             udpSocket.close();
             udpSocket = null;
         }
+    }
+
+    private DeviceDiscoveryResponseDTO staticFallbackResponse() {
+        return deviceRepository.findFirstByEnabledTrueAndStatusOrderByUpdatedAtDesc("在线")
+                .map(device -> new DeviceDiscoveryResponseDTO(
+                        device.getId(),
+                        device.getIp(),
+                        device.getName(),
+                        "ONLINE",
+                        System.currentTimeMillis(),
+                        "{\"source\":\"STATIC\"}",
+                        device.getRtspPath()
+                ))
+                .orElseGet(() -> new DeviceDiscoveryResponseDTO(
+                        null,
+                        null,
+                        null,
+                        "NOT_FOUND",
+                        System.currentTimeMillis(),
+                        "未发现设备，请检查网络连接",
+                        null
+                ));
+    }
+
+    private Device upsertDiscoveredDevice(String ip, String name) {
+        try {
+            Device device = deviceRepository.findFirstByIp(ip).orElseGet(Device::new);
+            if (device.getId() == null || device.getId().isBlank()) {
+                device.setId(generateDiscoveredId(ip));
+            }
+            device.setIp(ip);
+            if (name != null && !name.isBlank()) {
+                device.setName(name);
+            } else if (device.getName() == null || device.getName().isBlank()) {
+                device.setName("发现设备-" + ip);
+            }
+            if (device.getStatus() == null || device.getStatus().isBlank()) {
+                device.setStatus("在线");
+            }
+            device.setStatus("在线");
+            device.setEnabled(device.getEnabled() == null ? Boolean.TRUE : device.getEnabled());
+            device.setAccessMode("DISCOVERY");
+            device.setControlPort(device.getControlPort() == null ? 6667 : device.getControlPort());
+            device.setRtspPath(device.getRtspPath() == null || device.getRtspPath().isBlank() ? "/stream/audio" : device.getRtspPath());
+            device.setLastSeenAt(LocalDateTime.now(Device.ZONE_CN));
+            device.setLastConnectedTime(LocalDateTime.now(Device.ZONE_CN));
+            return deviceRepository.save(device);
+        } catch (Exception e) {
+            log.warn("写入发现设备注册表失败: ip={}", ip, e);
+            return null;
+        }
+    }
+
+    private String inferDiscoveredId(String ip) {
+        return "DIS-" + compactIdToken(ip, 10);
+    }
+
+    private String generateDiscoveredId(String ip) {
+        String base = "DIS-" + compactIdToken(ip, 10);
+        if (!deviceRepository.existsById(base)) {
+            return base;
+        }
+        for (int i = 1; i <= 9999; i++) {
+            String candidate = base + "-" + i;
+            if (!deviceRepository.existsById(candidate)) {
+                return candidate;
+            }
+        }
+        throw new IllegalStateException("生成发现设备编号失败");
+    }
+
+    private String compactIdToken(String raw, int maxLen) {
+        String normalized = raw == null ? "" : raw.replaceAll("[^0-9A-Za-z]", "");
+        if (normalized.isBlank()) {
+            normalized = "0000";
+        }
+        if (normalized.length() > maxLen) {
+            normalized = normalized.substring(normalized.length() - maxLen);
+        }
+        return normalized;
     }
 }
