@@ -11,6 +11,7 @@ import java.time.ZoneId;
 @Table(name = "device", indexes = {
         @Index(name = "idx_device_name", columnList = "name"),
         @Index(name = "idx_device_status", columnList = "status"),
+        @Index(name = "idx_device_hardware_id", columnList = "hardware_id"),
     @Index(name = "idx_device_enabled", columnList = "enabled"),
     @Index(name = "idx_device_access_mode", columnList = "access_mode"),
         @Index(name = "idx_device_responsible", columnList = "responsible"),
@@ -29,6 +30,9 @@ public class Device {
 
     @Column(nullable = false, length = 64)
     private String ip;
+
+    @Column(name = "hardware_id", length = 128)
+    private String hardwareId;
 
     @Column(name = "last_connected_time")
     private LocalDateTime lastConnectedTime;

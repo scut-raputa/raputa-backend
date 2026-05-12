@@ -20,4 +20,6 @@ public interface DeviceRepository extends JpaRepository<Device, String>, JpaSpec
     Optional<Device> findFirstByEnabledTrueAndStatusOrderByUpdatedAtDesc(String status);
 
     Optional<Device> findFirstByIp(String ip);
+
+    Optional<Device> findFirstByHardwareId(String hardwareId);
 }

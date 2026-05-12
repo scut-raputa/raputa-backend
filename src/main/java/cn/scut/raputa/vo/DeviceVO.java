@@ -10,6 +10,7 @@ public class DeviceVO {
     private String id;
     private String name;
     private String ip;
+    private String hardwareId;
     private String lastConnectedTime; // formatted "yyyy-MM-dd HH:mm:ss", nullable
     private String lastSeenAt;
     private String status;

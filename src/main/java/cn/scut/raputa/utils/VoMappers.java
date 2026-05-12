@@ -48,8 +48,9 @@ public final class VoMappers {
 
     public static PatientVO toPatientVO(Patient p) {
         Integer age = null;
+        LocalDate birth = null;
         if (p != null && p.getIdCard() != null && !p.getIdCard().isBlank()) {
-            LocalDate birth = parseBirthFromIdCard(p.getIdCard());
+            birth = parseBirthFromIdCard(p.getIdCard());
             if (birth != null) {
                 age = Period.between(birth, LocalDate.now(CCT)).getYears();
             }
@@ -61,6 +62,7 @@ public final class VoMappers {
                 .name(p.getName())
                 .gender(p.getGender())
                 .age(age)
+                .birth(birth == null ? null : birth.format(DTF))
                 .admit(p.getAdmit() == null ? null : p.getAdmit().format(DTF))
                 .dept(p.getDept())
                 .onsetDate(p.getOnsetDate())
@@ -131,6 +133,7 @@ public final class VoMappers {
                 .id(d.getId())
                 .name(d.getName())
                 .ip(d.getIp())
+                .hardwareId(d.getHardwareId())
                 .lastConnectedTime(d.getLastConnectedTime() == null ? null
                         : d.getLastConnectedTime().format(DTMF))
             .lastSeenAt(d.getLastSeenAt() == null ? null

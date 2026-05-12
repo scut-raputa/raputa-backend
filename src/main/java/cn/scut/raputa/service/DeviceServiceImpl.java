@@ -126,6 +126,9 @@ public class DeviceServiceImpl implements DeviceService {
     private void applyDto(Device device, DeviceDTO dto) {
         device.setName(dto.getName());
         device.setIp(normalizeIp(dto.getIp()));
+        String hardwareId = normalizeHardwareId(dto.getHardwareId());
+        assertHardwareUnique(hardwareId, device.getId());
+        device.setHardwareId(hardwareId);
         device.setStatus(dto.getStatus() != null ? dto.getStatus() : "离线");
         if (dto.getAccessMode() != null && !dto.getAccessMode().isBlank()) {
             device.setAccessMode(normalizeAccessMode(dto.getAccessMode()));
@@ -169,6 +172,24 @@ public class DeviceServiceImpl implements DeviceService {
     private String normalizeIp(String ip) {
         if (ip == null || ip.isBlank()) return "0.0.0.0";
         return ip.trim();
+    }
+
+    private String normalizeHardwareId(String hardwareId) {
+        if (hardwareId == null || hardwareId.isBlank()) {
+            return null;
+        }
+        return hardwareId.trim().toUpperCase();
+    }
+
+    private void assertHardwareUnique(String hardwareId, String currentId) {
+        if (hardwareId == null || hardwareId.isBlank()) {
+            return;
+        }
+        deviceRepository.findFirstByHardwareId(hardwareId)
+                .filter(existing -> !existing.getId().equals(currentId))
+                .ifPresent(existing -> {
+                    throw new BizException(409, "硬件标识已绑定设备：" + existing.getId());
+                });
     }
 
     private String normalizeAccessMode(String accessMode) {

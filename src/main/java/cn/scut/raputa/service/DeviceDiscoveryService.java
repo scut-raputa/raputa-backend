@@ -113,13 +113,13 @@ public class DeviceDiscoveryService {
                         log.info("解析到的JSON数据: {}", dataString);
                         JsonNode jsonNode = SocketTools.getJsonObject(dataString);
                         JsonNode ipNode = jsonNode.get("ip");
-//                        JsonNode macNode = jsonNode.get("mac");
+                        String hardwareId = extractHardwareId(jsonNode);
                         
                         if (ipNode != null && !ipNode.isNull()) {
                             String deviceIp = ipNode.asText();
                             
                             if (SocketTools.isValidIpAddress(deviceIp)) {
-                                log.info("发现设备，IP地址: {}", deviceIp);
+                                log.info("发现设备，IP地址: {}, 硬件标识: {}", deviceIp, hardwareId);
                                 
                                 // 安全获取设备名称
                                 String deviceName = "Unknown";
@@ -128,10 +128,10 @@ public class DeviceDiscoveryService {
                                     deviceName = nameNode.asText();
                                 }
 
-                                Device discoveredDevice = upsertDiscoveredDevice(deviceIp, deviceName);
+                                Device discoveredDevice = upsertDiscoveredDevice(deviceIp, deviceName, hardwareId);
                                 String discoveredDeviceId = discoveredDevice != null
                                         ? discoveredDevice.getId()
-                                        : inferDiscoveredId(deviceIp);
+                                        : inferDiscoveredId(hardwareId, deviceIp);
                                 String discoveredRtspPath = discoveredDevice != null
                                         ? discoveredDevice.getRtspPath()
                                         : "/stream/audio";
@@ -211,13 +211,19 @@ public class DeviceDiscoveryService {
                 ));
     }
 
-    private Device upsertDiscoveredDevice(String ip, String name) {
+    private Device upsertDiscoveredDevice(String ip, String name, String hardwareId) {
         try {
-            Device device = deviceRepository.findFirstByIp(ip).orElseGet(Device::new);
+            Device device = hardwareId == null || hardwareId.isBlank()
+                    ? deviceRepository.findFirstByIp(ip).orElseGet(Device::new)
+                    : deviceRepository.findFirstByHardwareId(hardwareId)
+                            .orElseGet(() -> deviceRepository.findFirstByIp(ip).orElseGet(Device::new));
             if (device.getId() == null || device.getId().isBlank()) {
-                device.setId(generateDiscoveredId(ip));
+                device.setId(generateDiscoveredId(hardwareId, ip));
             }
             device.setIp(ip);
+            if (hardwareId != null && !hardwareId.isBlank()) {
+                device.setHardwareId(hardwareId);
+            }
             if (name != null && !name.isBlank()) {
                 device.setName(name);
             } else if (device.getName() == null || device.getName().isBlank()) {
@@ -235,17 +241,17 @@ public class DeviceDiscoveryService {
             device.setLastConnectedTime(LocalDateTime.now(Device.ZONE_CN));
             return deviceRepository.save(device);
         } catch (Exception e) {
-            log.warn("写入发现设备注册表失败: ip={}", ip, e);
+            log.warn("写入发现设备注册表失败: ip={}, hardwareId={}", ip, hardwareId, e);
             return null;
         }
     }
 
-    private String inferDiscoveredId(String ip) {
-        return "DIS-" + compactIdToken(ip, 10);
+    private String inferDiscoveredId(String hardwareId, String ip) {
+        return "DIS-" + compactIdToken(identityToken(hardwareId, ip), 11);
     }
 
-    private String generateDiscoveredId(String ip) {
-        String base = "DIS-" + compactIdToken(ip, 10);
+    private String generateDiscoveredId(String hardwareId, String ip) {
+        String base = "DIS-" + compactIdToken(identityToken(hardwareId, ip), 11);
         if (!deviceRepository.existsById(base)) {
             return base;
         }
@@ -256,6 +262,26 @@ public class DeviceDiscoveryService {
             }
         }
         throw new IllegalStateException("生成发现设备编号失败");
+    }
+
+    private String extractHardwareId(JsonNode jsonNode) {
+        if (jsonNode == null || jsonNode.isNull()) {
+            return null;
+        }
+        for (String field : List.of("mac", "macAddress", "serial", "serialNo", "deviceId", "hostname")) {
+            JsonNode node = jsonNode.get(field);
+            if (node != null && !node.isNull()) {
+                String value = node.asText("").trim();
+                if (!value.isBlank()) {
+                    return value.toUpperCase();
+                }
+            }
+        }
+        return null;
+    }
+
+    private String identityToken(String hardwareId, String ip) {
+        return hardwareId == null || hardwareId.isBlank() ? ip : hardwareId;
     }
 
     private String compactIdToken(String raw, int maxLen) {

@@ -17,6 +17,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.util.Objects;
 
 @Service
 @RequiredArgsConstructor
@@ -56,13 +57,17 @@ public class PatientServiceImpl implements PatientService {
     @Override
     @Transactional
     public PatientVO create(PatientCreateDTO dto) {
-        if (!"男".equals(dto.getGender()) && !"女".equals(dto.getGender())) {
+        String gender = dto.getGender() == null ? null : dto.getGender().trim();
+        if (!"男".equals(gender) && !"女".equals(gender)) {
             throw new BizException(400, "性别仅支持：男 / 女");
         }
 
-        String idCard = dto.getIdCard() == null ? null : dto.getIdCard().trim();
+        String idCard = normalizeIdCard(dto.getIdCard());
         if (!isValidMainlandIdCard(idCard)) {
-            throw new BizException(400, "请输入有效的中国大陆居民身份证号");
+            throw new BizException(400, "请输入有效的中国大陆居民身份证号码");
+        }
+        if (!gender.equals(inferGenderFromIdCard(idCard))) {
+            throw new BizException(400, "性别与身份证信息不一致");
         }
 
         LocalDate today = LocalDate.now();
@@ -76,7 +81,7 @@ public class PatientServiceImpl implements PatientService {
         p.setId(genId);
         p.setOutpatientId(outpatientId);
         p.setName(dto.getName().trim());
-        p.setGender(dto.getGender());
+        p.setGender(gender);
         //p.setBirth(dto.getBirth());
         p.setDept(dto.getDept().trim());
         //p.setAddress(dto.getAddress().trim());
@@ -99,16 +104,27 @@ public class PatientServiceImpl implements PatientService {
         Patient p = patientRepository.findById(id)
                 .orElseThrow(() -> new BizException(404, "患者不存在"));
 
-
-        String idCard = dto.getIdCard() == null ? null : dto.getIdCard().trim();
-        if (!isValidMainlandIdCard(idCard)) {
-            throw new BizException(400, "请输入有效的中国大陆居民身份证号");
+        String gender = dto.getGender() == null ? null : dto.getGender().trim();
+        if (!"男".equals(gender) && !"女".equals(gender)) {
+            throw new BizException(400, "性别仅支持：男 / 女");
         }
 
-        // 更新字段
-        p.setName(dto.getName().trim());
-        p.setGender(dto.getGender());
-        p.setIdCard(idCard);
+        String idCard = normalizeIdCard(dto.getIdCard());
+        if (!isValidMainlandIdCard(idCard)) {
+            throw new BizException(400, "请输入有效的中国大陆居民身份证号码");
+        }
+        if (!gender.equals(inferGenderFromIdCard(idCard))) {
+            throw new BizException(400, "性别与身份证信息不一致");
+        }
+
+        String name = dto.getName() == null ? null : dto.getName().trim();
+        if (!Objects.equals(name, p.getName())
+                || !Objects.equals(gender, p.getGender())
+                || !Objects.equals(idCard, normalizeIdCard(p.getIdCard()))) {
+            throw new BizException(400, "姓名、性别和身份证号码已建档，不能在此处修改");
+        }
+
+        // 仅更新临床和住院过程信息；身份信息必须保持建档值。
         p.setDept(dto.getDept().trim());
         p.setOnsetDate(dto.getOnsetDate());
         p.setPastHistory(dto.getPastHistory() == null ? null : dto.getPastHistory().trim());
@@ -166,8 +182,17 @@ public class PatientServiceImpl implements PatientService {
         return patientRepository.save(p);
     }
 
+    private String normalizeIdCard(String idCard) {
+        return idCard == null ? null : idCard.trim().toUpperCase();
+    }
+
+    private String inferGenderFromIdCard(String idCard) {
+        int seqCode = idCard.charAt(16) - '0';
+        return seqCode % 2 == 1 ? "男" : "女";
+    }
+
     private boolean isValidMainlandIdCard(String idCard) {
-        if (idCard == null || !idCard.matches("^[1-9]\\d{5}(18|19|20)\\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\\d|3[01])\\d{3}[0-9Xx]$")) {
+        if (idCard == null || !idCard.matches("^\\d{6}(18|19|20)\\d{2}(0[1-9]|1[0-2])(0[1-9]|[12]\\d|3[01])\\d{3}[0-9Xx]$")) {
             return false;
         }
 

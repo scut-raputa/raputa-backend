@@ -7,7 +7,6 @@ import cn.scut.raputa.entity.Patient;
 import cn.scut.raputa.enums.CheckResult;
 import cn.scut.raputa.repository.CaptureSessionRepository;
 import cn.scut.raputa.repository.CheckRecordRepository;
-import cn.scut.raputa.repository.PatientFileRepository;
 import cn.scut.raputa.repository.PatientRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -30,7 +29,6 @@ public class StatsService {
 
     private final CheckRecordRepository checkRecordRepository;
     private final PatientRepository patientRepository;
-    private final PatientFileRepository patientFileRepository;
     private final CaptureSessionRepository captureSessionRepository;
 
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
@@ -76,11 +74,11 @@ public class StatsService {
         // 查询时间范围内的所有检查记录
         List<CheckRecord> records = checkRecordRepository.findByCheckTimeBetween(startDateTime, endDateTime);
 
-        // 按日期分组统计
+        // 按日期统计不同患者数，避免同一次检测产生多条结果记录后重复计数
         Map<LocalDate, Long> countByDate = records.stream()
             .collect(Collectors.groupingBy(
                 record -> record.getCheckTime().toLocalDate(),
-                Collectors.counting()
+                Collectors.mapping(CheckRecord::getPatientId, Collectors.collectingAndThen(Collectors.toSet(), set -> (long) set.size()))
             ));
 
         // 生成完整的日期序列
@@ -125,7 +123,9 @@ public class StatsService {
 
             Integer normal = resultMap.getOrDefault(CheckResult.NORMAL, 0L).intValue();
             Integer dysphagia = resultMap.getOrDefault(CheckResult.DYSPHAGIA, 0L).intValue();
-            Integer overt = resultMap.getOrDefault(CheckResult.OVERT_ASPIRATION, 0L).intValue();
+            Integer overt = Math.toIntExact(
+                    resultMap.getOrDefault(CheckResult.OVERT_ASPIRATION, 0L)
+                            + resultMap.getOrDefault(CheckResult.ASPIRATION, 0L));
             Integer silent = resultMap.getOrDefault(CheckResult.SILENT_ASPIRATION, 0L).intValue();
 
             result.add(new StatsDTO.DailyCheckResult(category, normal, dysphagia, overt, silent));
@@ -142,26 +142,37 @@ public class StatsService {
         LocalDateTime startDateTime = startDate.atStartOfDay();
         LocalDateTime endDateTime = endDate.plusDays(1).atStartOfDay();
 
-        // 查询时间范围内有检查记录的患者
         List<CheckRecord> records = checkRecordRepository.findByCheckTimeBetween(startDateTime, endDateTime);
         Set<String> patientIds = records.stream()
-            .map(CheckRecord::getPatientId)
-            .collect(Collectors.toSet());
+                .map(CheckRecord::getPatientId)
+                .filter(Objects::nonNull)
+                .collect(Collectors.toSet());
 
         if (patientIds.isEmpty()) {
             return new ArrayList<>();
         }
 
-        // 查询这些患者的信息
-        List<Patient> patients = patientRepository.findAllById(patientIds);
+        Map<String, String> currentDeptByPatient = patientRepository.findAllById(patientIds).stream()
+                .filter(patient -> patient.getDept() != null && !patient.getDept().isBlank())
+                .collect(Collectors.toMap(Patient::getId, Patient::getDept, (a, b) -> a));
 
-        // 按科室分组统计
-        Map<String, Long> countByDept = patients.stream()
-            .filter(patient -> patient.getDept() != null && !patient.getDept().isEmpty())
-            .collect(Collectors.groupingBy(
-                Patient::getDept,
-                Collectors.counting()
-            ));
+        Map<String, String> deptByPatient = new HashMap<>();
+        for (CheckRecord record : records) {
+            String patientId = record.getPatientId();
+            if (patientId == null || deptByPatient.containsKey(patientId)) {
+                continue;
+            }
+            String snapshot = record.getPatientDeptSnapshot();
+            String dept = snapshot != null && !snapshot.isBlank()
+                    ? snapshot
+                    : currentDeptByPatient.get(patientId);
+            if (dept != null && !dept.isBlank()) {
+                deptByPatient.put(patientId, dept);
+            }
+        }
+
+        Map<String, Long> countByDept = deptByPatient.values().stream()
+                .collect(Collectors.groupingBy(dept -> dept, Collectors.counting()));
 
         // 转换为结果列表并按数量降序排序
         return countByDept.entrySet().stream()
@@ -177,37 +188,36 @@ public class StatsService {
         LocalDateTime startDateTime = startDate.atStartOfDay();
         LocalDateTime endDateTime = endDate.plusDays(1).atStartOfDay();
 
-        // 查询时间范围内的患者文件记录 (CSV文件代表设备使用)
-        List<Object[]> deviceUsageData = patientFileRepository.findDeviceUsageStats(
-            startDateTime, endDateTime);
-
-        Set<String> sessionIds = deviceUsageData.stream()
-            .map(row -> (String) row[0])
-            .filter(Objects::nonNull)
-            .filter(s -> !s.isBlank())
-            .collect(Collectors.toSet());
-
-        Map<String, String> sessionToDevice = captureSessionRepository.findAllById(sessionIds).stream()
-            .filter(session -> session.getDeviceId() != null && !session.getDeviceId().isBlank())
-            .collect(Collectors.toMap(CaptureSession::getId, CaptureSession::getDeviceId, (a, b) -> a));
-
-        // 按设备ID和日期分组统计使用时长
         Map<String, Map<LocalDate, Double>> usageByDeviceAndDate = new HashMap<>();
 
-        for (Object[] row : deviceUsageData) {
-            String sessionId = (String) row[0];
-            LocalDateTime savedAt = (LocalDateTime) row[1];
-            Long fileCount = (Long) row[2];
+        for (CaptureSession session : captureSessionRepository.findByStartedAtBeforeAndDeviceIdIsNotNull(endDateTime)) {
+            String deviceId = session.getDeviceId();
+            LocalDateTime sessionStart = session.getStartedAt();
+            LocalDateTime sessionEnd = sessionEndTime(session);
+            if (deviceId == null || deviceId.isBlank() || sessionStart == null || sessionEnd == null) {
+                continue;
+            }
+            if (sessionEnd.isBefore(sessionStart)) {
+                sessionEnd = sessionStart;
+            }
 
-            String deviceId = sessionToDevice.getOrDefault(sessionId, "UNKNOWN");
-            LocalDate date = savedAt.toLocalDate();
+            LocalDateTime clippedStart = max(sessionStart, startDateTime);
+            LocalDateTime clippedEnd = min(sessionEnd, endDateTime);
+            if (!clippedStart.isBefore(clippedEnd)) {
+                continue;
+            }
 
-            // 估算使用时长: 每个文件约代表0.5小时的使用
-            double hours = fileCount * 0.5;
-
-            usageByDeviceAndDate
-                .computeIfAbsent(deviceId, k -> new HashMap<>())
-                .merge(date, hours, Double::sum);
+            LocalDateTime cursor = clippedStart;
+            while (cursor.isBefore(clippedEnd)) {
+                LocalDate date = cursor.toLocalDate();
+                LocalDateTime nextDay = date.plusDays(1).atStartOfDay();
+                LocalDateTime segmentEnd = min(nextDay, clippedEnd);
+                double hours = java.time.Duration.between(cursor, segmentEnd).toMillis() / 3_600_000.0;
+                usageByDeviceAndDate
+                        .computeIfAbsent(deviceId, k -> new HashMap<>())
+                        .merge(date, hours, Double::sum);
+                cursor = segmentEnd;
+            }
         }
 
         // 转换为结果列表
@@ -234,6 +244,27 @@ public class StatsService {
         return result;
     }
 
+    private LocalDateTime sessionEndTime(CaptureSession session) {
+        if (session.getStoppedAt() != null) {
+            return session.getStoppedAt();
+        }
+        if (session.getFinalizedAt() != null) {
+            return session.getFinalizedAt();
+        }
+        if (session.getUpdatedAt() != null) {
+            return session.getUpdatedAt();
+        }
+        return session.getStartedAt();
+    }
+
+    private LocalDateTime min(LocalDateTime a, LocalDateTime b) {
+        return a.isBefore(b) ? a : b;
+    }
+
+    private LocalDateTime max(LocalDateTime a, LocalDateTime b) {
+        return a.isAfter(b) ? a : b;
+    }
+
     /**
      * 格式化日期类别标签
      * 如果日期范围<=7天，使用星期几；否则使用日期
@@ -251,4 +282,3 @@ public class StatsService {
         }
     }
 }
-

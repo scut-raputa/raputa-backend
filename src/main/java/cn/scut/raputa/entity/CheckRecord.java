@@ -16,6 +16,7 @@ import cn.scut.raputa.enums.CheckResult;
         @Index(name = "idx_check_name", columnList = "name"),
         @Index(name = "idx_check_staff", columnList = "staff"),
         @Index(name = "idx_check_result", columnList = "result"),
+        @Index(name = "idx_check_patient_dept_snapshot", columnList = "patient_dept_snapshot"),
         @Index(name = "idx_check_time", columnList = "check_time")
 })
 public class CheckRecord {
@@ -34,6 +35,9 @@ public class CheckRecord {
 
     @Column(nullable = false, length = 64)
     private String staff;
+
+    @Column(name = "patient_dept_snapshot", length = 128)
+    private String patientDeptSnapshot;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 32)

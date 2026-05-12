@@ -18,7 +18,8 @@ public class PatientCreateDTO {
     @Pattern(regexp = "男|女")
     private String gender;
 
-    @NotNull
+    @NotBlank
+    @Size(min = 18, max = 18)
     private String idCard;
 
     @NotBlank
