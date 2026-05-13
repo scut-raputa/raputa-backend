@@ -8,6 +8,12 @@ import lombok.Data;
 public class AppointmentVO {
     private String id;
     private String name;
+    private String gender;
+    private String idCard;
+    private String birth;
+    private Integer age;
+    private String phone;
     private String dept;
     private String time;
+    private String status;
 }

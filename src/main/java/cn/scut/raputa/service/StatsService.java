@@ -123,12 +123,12 @@ public class StatsService {
 
             Integer normal = resultMap.getOrDefault(CheckResult.NORMAL, 0L).intValue();
             Integer dysphagia = resultMap.getOrDefault(CheckResult.DYSPHAGIA, 0L).intValue();
-            Integer overt = Math.toIntExact(
+            Integer aspiration = Math.toIntExact(
                     resultMap.getOrDefault(CheckResult.OVERT_ASPIRATION, 0L)
+                            + resultMap.getOrDefault(CheckResult.SILENT_ASPIRATION, 0L)
                             + resultMap.getOrDefault(CheckResult.ASPIRATION, 0L));
-            Integer silent = resultMap.getOrDefault(CheckResult.SILENT_ASPIRATION, 0L).intValue();
 
-            result.add(new StatsDTO.DailyCheckResult(category, normal, dysphagia, overt, silent));
+            result.add(new StatsDTO.DailyCheckResult(category, normal, dysphagia, aspiration));
             current = current.plusDays(1);
         }
 
@@ -212,10 +212,10 @@ public class StatsService {
                 LocalDate date = cursor.toLocalDate();
                 LocalDateTime nextDay = date.plusDays(1).atStartOfDay();
                 LocalDateTime segmentEnd = min(nextDay, clippedEnd);
-                double hours = java.time.Duration.between(cursor, segmentEnd).toMillis() / 3_600_000.0;
+                double minutes = java.time.Duration.between(cursor, segmentEnd).toMillis() / 60_000.0;
                 usageByDeviceAndDate
                         .computeIfAbsent(deviceId, k -> new HashMap<>())
-                        .merge(date, hours, Double::sum);
+                        .merge(date, minutes, Double::sum);
                 cursor = segmentEnd;
             }
         }
@@ -227,15 +227,15 @@ public class StatsService {
             Map<LocalDate, Double> dateUsageMap = entry.getValue();
 
             // 生成完整的日期序列
-            List<Double> usageHours = new ArrayList<>();
+            List<Double> usageMinutes = new ArrayList<>();
             LocalDate current = startDate;
             while (!current.isAfter(endDate)) {
-                Double hours = dateUsageMap.getOrDefault(current, 0.0);
-                usageHours.add(Math.round(hours * 10.0) / 10.0); // 保留1位小数
+                Double minutes = dateUsageMap.getOrDefault(current, 0.0);
+                usageMinutes.add(Math.round(minutes * 10.0) / 10.0); // 保留1位小数
                 current = current.plusDays(1);
             }
 
-            result.add(new StatsDTO.DeviceUsage(deviceId, usageHours));
+            result.add(new StatsDTO.DeviceUsage(deviceId, usageMinutes));
         }
 
         // 按设备ID排序

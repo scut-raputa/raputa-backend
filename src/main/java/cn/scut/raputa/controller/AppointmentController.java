@@ -28,8 +28,9 @@ AppointmentController {
             @RequestParam(required = false) String id,
             @RequestParam(required = false) String name,
             @RequestParam(required = false) String dept,
-            @RequestParam(required = false) String date) {
-        Page<AppointmentVO> pg = appointmentService.page(page, size, id, name, dept, date);
+            @RequestParam(required = false) String date,
+            @RequestParam(required = false) String status) {
+        Page<AppointmentVO> pg = appointmentService.page(page, size, id, name, dept, date, status);
         return ApiResponse.ok(new PageWrap<>(pg.getContent(), pg.getTotalElements()));
     }
 

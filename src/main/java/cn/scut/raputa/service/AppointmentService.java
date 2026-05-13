@@ -6,7 +6,7 @@ import cn.scut.raputa.vo.AppointmentVO;
 import org.springframework.data.domain.Page;
 
 public interface AppointmentService {
-    Page<AppointmentVO> page(int page, int size, String id, String name, String dept, String date);
+    Page<AppointmentVO> page(int page, int size, String id, String name, String dept, String date, String status);
 
     AppointmentVO create(AppointmentCreateDTO dto);
 

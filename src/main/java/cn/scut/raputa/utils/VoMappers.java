@@ -95,11 +95,18 @@ public final class VoMappers {
 
     public static AppointmentVO toAppointmentVO(Appointment a) {
         DateTimeFormatter TF = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        LocalDate birth = parseBirthFromIdCard(a.getIdCard());
         return AppointmentVO.builder()
                 .id(a.getId())
                 .name(a.getName())
+                .gender(a.getGender())
+                .idCard(a.getIdCard())
+                .birth(birth == null ? null : birth.format(DTF))
+                .age(birth == null ? null : Period.between(birth, LocalDate.now(CCT)).getYears())
+                .phone(a.getPhone())
                 .dept(a.getDept())
                 .time(a.getApptTime() == null ? null : a.getApptTime().format(TF))
+                .status(a.getStatus() == null || a.getStatus().isBlank() ? "PENDING" : a.getStatus())
                 .build();
     }
 

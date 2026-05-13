@@ -3,9 +3,9 @@ package cn.scut.raputa.enums;
 public enum CheckResult {
     NORMAL("正常"),
     DYSPHAGIA("吞咽障碍"),
-    OVERT_ASPIRATION("显性误吸"),
-    SILENT_ASPIRATION("隐性误吸"),
-    ASPIRATION("误吸");  // 保留用于向后兼容
+    OVERT_ASPIRATION("误吸"),
+    SILENT_ASPIRATION("误吸"),
+    ASPIRATION("误吸");
 
     private final String label;
 
@@ -20,10 +20,6 @@ public enum CheckResult {
                 return NORMAL;
             case "吞咽障碍":
                 return DYSPHAGIA;
-            case "显性误吸":
-                return OVERT_ASPIRATION;
-            case "隐性误吸":
-                return SILENT_ASPIRATION;
             case "误吸":
                 return ASPIRATION;
         }
@@ -32,5 +28,9 @@ public enum CheckResult {
         } catch (Exception ignored) {
             return null;
         }
+    }
+
+    public boolean isAspiration() {
+        return this == ASPIRATION || this == OVERT_ASPIRATION || this == SILENT_ASPIRATION;
     }
 }

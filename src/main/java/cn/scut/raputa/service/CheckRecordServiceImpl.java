@@ -111,7 +111,16 @@ public class CheckRecordServiceImpl implements CheckRecordService {
             if (r == null || r.isEmpty())
                 return null;
             CheckResult cr = CheckResult.fromLabel(r);
-            return (cr == null) ? null : cb.equal(root.get("result"), cr);
+            if (cr == null) {
+                return null;
+            }
+            if (cr.isAspiration()) {
+                return root.get("result").in(
+                        CheckResult.ASPIRATION,
+                        CheckResult.OVERT_ASPIRATION,
+                        CheckResult.SILENT_ASPIRATION);
+            }
+            return cb.equal(root.get("result"), cr);
         };
     }
 

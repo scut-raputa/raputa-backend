@@ -14,8 +14,8 @@ import java.time.LocalDate;
 @AllArgsConstructor
 @Builder
 public class AppointmentUpdateDTO {
-    @Size(max = 64, message = "姓名长度不能超过64个字符")
-    private String name;
+    @Size(max = 32, message = "联系电话长度不能超过32个字符")
+    private String phone;
 
     @Size(max = 128, message = "科室长度不能超过128个字符")
     private String dept;

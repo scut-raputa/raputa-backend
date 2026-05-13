@@ -32,8 +32,7 @@ public class StatsDTO {
         private String category;      // 日期标签
         private Integer normal;       // 正常患者数
         private Integer dysphagia;    // 吞咽障碍患者数
-        private Integer overt;        // 显性误吸患者数
-        private Integer silent;       // 隐性误吸患者数
+        private Integer aspiration;   // 误吸患者数
     }
 
     /**
@@ -55,7 +54,7 @@ public class StatsDTO {
     @AllArgsConstructor
     public static class DeviceUsage {
         private String deviceId;           // 设备ID
-        private List<Double> usageHours;   // 每日使用时长数组 (单位: 小时)
+        private List<Double> usageMinutes; // 每日使用时长数组 (单位: 分钟)
     }
 
     /**

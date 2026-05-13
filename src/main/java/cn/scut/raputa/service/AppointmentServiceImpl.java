@@ -24,7 +24,7 @@ public class AppointmentServiceImpl implements AppointmentService {
     private final AppointmentRepository appointmentRepository;
 
     @Override
-    public Page<AppointmentVO> page(int page, int size, String id, String name, String dept, String date) {
+    public Page<AppointmentVO> page(int page, int size, String id, String name, String dept, String date, String status) {
         if (date == null || date.isEmpty()) {
             LocalDate today = LocalDate.now(ZoneId.of("Asia/Shanghai"));
             date = today.toString();
@@ -34,7 +34,8 @@ public class AppointmentServiceImpl implements AppointmentService {
                 .and(likeIfPresent("id", id))
                 .and(likeIfPresent("name", name))
                 .and(likeIfPresent("dept", dept))
-                .and(dateIfPresent("apptTime", date));
+                .and(dateIfPresent("apptTime", date))
+                .and(statusIfPresent(status));
 
         Page<Appointment> pg = appointmentRepository.findAll(
                 spec,
@@ -61,6 +62,19 @@ public class AppointmentServiceImpl implements AppointmentService {
         };
     }
 
+    private Specification<Appointment> statusIfPresent(String status) {
+        return (root, query, cb) -> {
+            String normalized = status == null ? "" : status.trim().toUpperCase();
+            if ("ALL".equals(normalized)) {
+                return null;
+            }
+            if (normalized.isEmpty() || "PENDING".equals(normalized)) {
+                return cb.or(cb.isNull(root.get("status")), cb.equal(root.get("status"), "PENDING"));
+            }
+            return cb.equal(root.get("status"), normalized);
+        };
+    }
+
 
     @Override
     public AppointmentVO create(AppointmentCreateDTO dto) {
@@ -72,8 +86,12 @@ public class AppointmentServiceImpl implements AppointmentService {
         Appointment a = new Appointment();
         a.setId(outpatientId);
         a.setName(dto.getName() == null ? null : dto.getName().trim());
+        a.setGender(dto.getGender() == null ? null : dto.getGender().trim());
+        a.setIdCard(dto.getIdCard() == null ? null : dto.getIdCard().trim().toUpperCase());
+        a.setPhone(dto.getPhone() == null ? null : dto.getPhone().trim());
         a.setDept(dto.getDept() == null ? null : dto.getDept().trim());
         a.setApptTime(dto.getTime());
+        a.setStatus("PENDING");
 
         Appointment saved = appointmentRepository.save(a);
         return VoMappers.toAppointmentVO(saved);
@@ -95,7 +113,7 @@ public class AppointmentServiceImpl implements AppointmentService {
     public AppointmentVO update(String id, AppointmentUpdateDTO dto) {
         Appointment a = appointmentRepository.findById(id)
                 .orElseThrow(() -> new BizException(404, "预约不存在"));
-        if (dto.getName() != null) a.setName(dto.getName().trim());
+        if (dto.getPhone() != null) a.setPhone(dto.getPhone().trim());
         if (dto.getDept() != null) a.setDept(dto.getDept().trim());
         if (dto.getTime() != null) {
             validateApptTime(dto.getTime());
