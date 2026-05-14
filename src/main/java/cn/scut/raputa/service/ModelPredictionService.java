@@ -1,6 +1,8 @@
 package cn.scut.raputa.service;
 
 import cn.scut.raputa.config.InferenceProperties;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.http.*;
@@ -25,9 +27,11 @@ public class ModelPredictionService {
 
     private final RestTemplate restTemplate;
     private final InferenceProperties inferenceProperties;
+    private final ObjectMapper objectMapper;
 
     public ModelPredictionService(InferenceProperties inferenceProperties) {
         this.inferenceProperties = inferenceProperties;
+        this.objectMapper = new ObjectMapper();
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(Math.max(inferenceProperties.getConnectTimeoutMs(), 100));
         factory.setReadTimeout(Math.max(inferenceProperties.getReadTimeoutMs(), 100));
@@ -43,6 +47,26 @@ public class ModelPredictionService {
      * @return 预测结果
      */
     public PredictionResult uploadAndPredict(File audioFile, File imuFile, File gasFile) {
+        return uploadAndPredict(audioFile, imuFile, gasFile, null);
+    }
+
+    /**
+     * 上传文件并调用模型预测，可选传入人工分割的吞咽段。
+     */
+    public PredictionResult uploadAndPredict(
+            File audioFile,
+            File imuFile,
+            File gasFile,
+            List<List<Number>> manualSwallowEvents) {
+        return uploadAndPredict(audioFile, imuFile, gasFile, manualSwallowEvents, null);
+    }
+
+    public PredictionResult uploadAndPredict(
+            File audioFile,
+            File imuFile,
+            File gasFile,
+            List<List<Number>> manualSwallowEvents,
+            Integer predictionWindowSeconds) {
         try {
             String modelApiUrl = buildUploadPredictUrl();
 
@@ -54,12 +78,22 @@ public class ModelPredictionService {
             body.add("audio", new FileSystemResource(audioFile));
             body.add("imu", new FileSystemResource(imuFile));
             body.add("gas", new FileSystemResource(gasFile));
+            if (manualSwallowEvents != null) {
+                body.add("segmentation_mode", "manual");
+                body.add("swallow_events", objectMapper.writeValueAsString(manualSwallowEvents));
+            }
+            if (predictionWindowSeconds != null && predictionWindowSeconds > 0) {
+                body.add("prediction_window_seconds", String.valueOf(predictionWindowSeconds));
+            }
 
             HttpEntity<MultiValueMap<String, Object>> requestEntity = new HttpEntity<>(body, headers);
 
             log.info("调用模型API: {}", modelApiUrl);
             log.info("上传文件: audio={}, imu={}, gas={}", 
                 audioFile.getName(), imuFile.getName(), gasFile.getName());
+            if (manualSwallowEvents != null) {
+                log.info("使用人工吞咽段进行推理: {}", manualSwallowEvents);
+            }
 
             // 发送请求
             ResponseEntity<Map<String, Object>> response = restTemplate.exchange(
@@ -80,6 +114,9 @@ public class ModelPredictionService {
 
         } catch (RestClientException e) {
             log.error("调用模型API失败", e);
+            return null;
+        } catch (JsonProcessingException e) {
+            log.error("人工吞咽段序列化失败", e);
             return null;
         }
     }
@@ -139,6 +176,7 @@ public class ModelPredictionService {
      */
     public static class PredictionResult {
         private String message;
+        private Integer predictionWindowSeconds;
         private List<List<Number>> swallowEvents;
         private List<Map<String, Object>> dysphagia;
         private List<Map<String, Object>> aspiration;
@@ -149,6 +187,14 @@ public class ModelPredictionService {
         
         public void setMessage(String message) {
             this.message = message;
+        }
+
+        public Integer getPredictionWindowSeconds() {
+            return predictionWindowSeconds;
+        }
+
+        public void setPredictionWindowSeconds(Integer predictionWindowSeconds) {
+            this.predictionWindowSeconds = predictionWindowSeconds;
         }
         
         public List<List<Number>> getSwallowEvents() {

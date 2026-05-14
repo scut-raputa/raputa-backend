@@ -174,6 +174,43 @@ public class RealtimeDataController {
         }
     }
 
+    @PostMapping("/segmentation-mode")
+    @Operation(summary = "设置实时吞咽分割模式", description = "AUTO 使用模型自动分割；MANUAL 使用前端提交的人工吞咽段")
+    public ResponseEntity<ApiResponse<Boolean>> setSegmentationMode(
+            @RequestBody SegmentationModeRequest req) {
+        if (req.deviceId() == null || req.deviceId().isBlank()) {
+            return ResponseEntity.ok(ApiResponse.error(400, "deviceId 为必填"));
+        }
+        if (!"AUTO".equalsIgnoreCase(req.mode()) && !"MANUAL".equalsIgnoreCase(req.mode())) {
+            return ResponseEntity.ok(ApiResponse.error(400, "mode 只能为 AUTO 或 MANUAL"));
+        }
+        boolean success = realtimeDataService.setSegmentationMode(req.deviceId(), req.mode());
+        if (!success) {
+            return ResponseEntity.ok(ApiResponse.error(404, "设备未连接，无法设置分割模式"));
+        }
+        return ResponseEntity.ok(ApiResponse.ok(true, "实时分割模式已更新"));
+    }
+
+    @PostMapping("/manual-swallow-segment")
+    @Operation(summary = "提交人工吞咽段", description = "实时人工分割模式下提交开始/结束时间点，供模型跳过自动分割后直接推理")
+    public ResponseEntity<ApiResponse<Boolean>> submitManualSwallowSegment(
+            @RequestBody ManualSwallowSegmentRequest req) {
+        if (req.deviceId() == null || req.deviceId().isBlank()) {
+            return ResponseEntity.ok(ApiResponse.error(400, "deviceId 为必填"));
+        }
+        if (req.startSec() == null || req.endSec() == null || req.endSec() <= req.startSec()) {
+            return ResponseEntity.ok(ApiResponse.error(400, "人工吞咽段时间范围不合法"));
+        }
+        boolean success = realtimeDataService.addManualSwallowSegment(
+                req.deviceId(),
+                req.startSec(),
+                req.endSec());
+        if (!success) {
+            return ResponseEntity.ok(ApiResponse.error(404, "设备未连接或未开启人工分割模式"));
+        }
+        return ResponseEntity.ok(ApiResponse.ok(true, "人工吞咽段已提交"));
+    }
+
     // ========== 数据查询接口 ==========
 
     @GetMapping("/imu/{deviceId}")
@@ -385,5 +422,16 @@ public class RealtimeDataController {
         String deviceName,
         String patientId,
         String patientName
+    ) {}
+
+    public record SegmentationModeRequest(
+        String deviceId,
+        String mode
+    ) {}
+
+    public record ManualSwallowSegmentRequest(
+        String deviceId,
+        Double startSec,
+        Double endSec
     ) {}
 }

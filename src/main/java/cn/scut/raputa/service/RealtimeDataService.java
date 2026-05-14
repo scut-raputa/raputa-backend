@@ -29,9 +29,11 @@ import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Queue;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -127,6 +129,9 @@ public class RealtimeDataService {
         // 定时预测任务
         private java.util.concurrent.ScheduledFuture<?> predictionTask;
         private java.util.concurrent.ScheduledFuture<?> lockHeartbeatTask;
+        private final AtomicBoolean manualSegmentationMode = new AtomicBoolean(false);
+        private final Queue<ManualSwallowSegment> pendingManualSegments = new ConcurrentLinkedQueue<>();
+        private final long startedNanoTime = System.nanoTime();
 
         public DeviceConnection(String deviceId) {
             this.deviceId = deviceId;
@@ -143,6 +148,9 @@ public class RealtimeDataService {
             }
             return allDataReady.get();
         }
+    }
+
+    private record ManualSwallowSegment(double startSec, double endSec) {
     }
 
     /**
@@ -377,6 +385,33 @@ public class RealtimeDataService {
         }, interval, interval, TimeUnit.SECONDS);
     }
 
+    public boolean setSegmentationMode(String deviceId, String mode) {
+        DeviceConnection connection = deviceConnections.get(deviceId);
+        if (connection == null) {
+            return false;
+        }
+
+        boolean manual = "MANUAL".equalsIgnoreCase(mode);
+        connection.manualSegmentationMode.set(manual);
+        connection.pendingManualSegments.clear();
+        log.info("设备 {} 实时分割模式切换为 {}", deviceId, manual ? "MANUAL" : "AUTO");
+        return true;
+    }
+
+    public boolean addManualSwallowSegment(String deviceId, double startSec, double endSec) {
+        DeviceConnection connection = deviceConnections.get(deviceId);
+        if (connection == null || !connection.manualSegmentationMode.get()) {
+            return false;
+        }
+        if (!Double.isFinite(startSec) || !Double.isFinite(endSec) || endSec <= startSec) {
+            return false;
+        }
+
+        connection.pendingManualSegments.add(new ManualSwallowSegment(startSec, endSec));
+        log.info("设备 {} 收到人工吞咽段: {}s - {}s", deviceId, startSec, endSec);
+        return true;
+    }
+
     /**
      * 启动CSV写入定时器 - 参考原始项目的setTimerWIMU和setTimerWGas
      */
@@ -448,27 +483,65 @@ public class RealtimeDataService {
         File gasSegment = null;
         try {
             log.info("开始执行设备 {} 的模型预测", connection.deviceId);
-            
-            // 导出最近10秒的数据段
-            audioSegment = csvDataService.exportAudioSegment(connection.deviceId, 5);
-            imuSegment = csvDataService.exportDataSegment(connection.deviceId, "imu", 5);
-            gasSegment = csvDataService.exportDataSegment(connection.deviceId, "gas", 5);
+
+            boolean manualMode = connection.manualSegmentationMode.get();
+            List<ManualSwallowSegment> manualSegments = drainManualSegments(connection);
+            if (manualMode && manualSegments.isEmpty()) {
+                ModelPredictionService.PredictionResult emptyResult =
+                        new ModelPredictionService.PredictionResult();
+                emptyResult.setMessage("未检测到人工吞咽段");
+                emptyResult.setPredictionWindowSeconds(5);
+                webSocketService.pushPredictionResult(connection.deviceId, emptyResult);
+                log.info("设备 {} 处于人工分割模式，但当前没有人工吞咽段，跳过模型调用", connection.deviceId);
+                return;
+            }
+
+            int predictionWindowSeconds = manualMode
+                    ? calculateManualPredictionWindow(connection, manualSegments)
+                    : 5;
+
+            // 导出最近一段数据。自动模式固定 5 秒；人工模式按人工段回溯足够窗口。
+            audioSegment = csvDataService.exportAudioSegment(connection.deviceId, predictionWindowSeconds);
+            imuSegment = csvDataService.exportDataSegment(connection.deviceId, "imu", predictionWindowSeconds);
+            gasSegment = csvDataService.exportDataSegment(connection.deviceId, "gas", predictionWindowSeconds);
             
             if (audioSegment == null || imuSegment == null || gasSegment == null) {
                 log.warn("设备 {} 数据段导出失败，跳过本次预测", connection.deviceId);
+                if (manualMode) {
+                    manualSegments.forEach(connection.pendingManualSegments::add);
+                }
                 return;
             }
-            
+
+            List<List<Number>> manualEvents = manualMode
+                    ? toModelManualEvents(connection, manualSegments, predictionWindowSeconds)
+                    : null;
+
+            if (manualMode && manualEvents.isEmpty()) {
+                ModelPredictionService.PredictionResult emptyResult =
+                        new ModelPredictionService.PredictionResult();
+                emptyResult.setMessage("未检测到人工吞咽段");
+                emptyResult.setPredictionWindowSeconds(predictionWindowSeconds);
+                webSocketService.pushPredictionResult(connection.deviceId, emptyResult);
+                return;
+            }
+
             // 调用模型预测
             ModelPredictionService.PredictionResult result = 
-                modelPredictionService.uploadAndPredict(audioSegment, imuSegment, gasSegment);
+                modelPredictionService.uploadAndPredict(
+                        audioSegment,
+                        imuSegment,
+                        gasSegment,
+                        manualEvents,
+                        manualMode ? predictionWindowSeconds : null);
             
             if (result != null) {
+                result.setPredictionWindowSeconds(predictionWindowSeconds);
                 // 推送结果到前端
                 webSocketService.pushPredictionResult(connection.deviceId, result);
                 
                 if (result.hasSwallowEvents()) {
-                    log.info("设备 {} 预测成功，检测到 {} 个吴咙事件", 
+                    log.info("设备 {} 预测成功，检测到 {} 个吞咽事件",
                         connection.deviceId, result.getSwallowEvents().size());
                 } else if (result.getMessage() != null) {
                     log.info("设备 {} 预测结果: {}", connection.deviceId, result.getMessage());
@@ -490,6 +563,52 @@ public class RealtimeDataService {
                 gasSegment.delete();
             }
         }
+    }
+
+    private List<ManualSwallowSegment> drainManualSegments(DeviceConnection connection) {
+        List<ManualSwallowSegment> segments = new ArrayList<>();
+        ManualSwallowSegment segment;
+        while ((segment = connection.pendingManualSegments.poll()) != null) {
+            segments.add(segment);
+        }
+        return segments;
+    }
+
+    private int calculateManualPredictionWindow(
+            DeviceConnection connection,
+            List<ManualSwallowSegment> manualSegments) {
+        double nowSec = currentSessionSeconds(connection);
+        double earliestStart = manualSegments.stream()
+                .mapToDouble(ManualSwallowSegment::startSec)
+                .min()
+                .orElse(nowSec);
+        int seconds = (int) Math.ceil(Math.max(5.0, nowSec - earliestStart + 1.0));
+        return Math.min(Math.max(seconds, 5), 30);
+    }
+
+    private double currentSessionSeconds(DeviceConnection connection) {
+        return (System.nanoTime() - connection.startedNanoTime) / 1_000_000_000.0;
+    }
+
+    private List<List<Number>> toModelManualEvents(
+            DeviceConnection connection,
+            List<ManualSwallowSegment> manualSegments,
+            int predictionWindowSeconds) {
+        double windowStartSec = Math.max(0, currentSessionSeconds(connection) - predictionWindowSeconds);
+        long maxWindowMs = predictionWindowSeconds * 1000L;
+        List<List<Number>> events = new ArrayList<>();
+
+        for (ManualSwallowSegment segment : manualSegments) {
+            long startMs = Math.max(0, Math.round((segment.startSec() - windowStartSec) * 1000));
+            long endMs = Math.max(startMs + 1, Math.round((segment.endSec() - windowStartSec) * 1000));
+            startMs = Math.min(startMs, maxWindowMs);
+            endMs = Math.min(endMs, maxWindowMs);
+            if (endMs > startMs) {
+                events.add(List.of((Number) startMs, (Number) endMs));
+            }
+        }
+
+        return events;
     }
     
     /**
