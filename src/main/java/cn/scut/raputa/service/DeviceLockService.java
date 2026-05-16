@@ -113,6 +113,14 @@ public class DeviceLockService {
         return isExpired(lock, now()) ? null : lock;
     }
 
+    @Transactional(readOnly = true)
+    public boolean hasActiveLockForHolder(String holder) {
+        if (holder == null || holder.isBlank()) {
+            return false;
+        }
+        return deviceSessionLockRepository.existsByHolderAndExpiresAtAfter(holder.trim(), now());
+    }
+
     @Transactional
     public int cleanupExpiredLocks() {
         LocalDateTime now = now();

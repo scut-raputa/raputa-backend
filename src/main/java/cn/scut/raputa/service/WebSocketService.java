@@ -87,6 +87,16 @@ public class WebSocketService {
             log.error("推送预测结果失败: deviceId={}", deviceId, e);
         }
     }
+
+    public void pushDeviceControl(String deviceId, Object command) {
+        try {
+            String destination = "/topic/device/" + deviceId + "/control";
+            messagingTemplate.convertAndSend(destination, command);
+            log.info("推送设备控制指令: deviceId={}, destination={}", deviceId, destination);
+        } catch (Exception e) {
+            log.error("推送设备控制指令失败: deviceId={}", deviceId, e);
+        }
+    }
     
     /**
      * 推送批量IMU数据(用于降低推送频率,避免前端卡顿)
@@ -116,7 +126,6 @@ public class WebSocketService {
         }
     }
 }
-
 
 
 

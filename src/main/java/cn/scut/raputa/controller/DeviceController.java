@@ -1,11 +1,15 @@
 package cn.scut.raputa.controller;
 
 import cn.scut.raputa.dto.DeviceDTO;
+import cn.scut.raputa.entity.User;
+import cn.scut.raputa.enums.UserRole;
 import cn.scut.raputa.response.ApiResponse;
 import cn.scut.raputa.service.DeviceService;
+import cn.scut.raputa.service.UserService;
 import cn.scut.raputa.vo.DeviceVO;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -14,6 +18,7 @@ import org.springframework.web.bind.annotation.*;
 public class DeviceController {
 
     private final DeviceService deviceService;
+    private final UserService userService;
 
     @GetMapping
     public ApiResponse<?> list(
@@ -49,19 +54,14 @@ public class DeviceController {
         return ApiResponse.ok(null);
     }
 
-    @PatchMapping("/{id}/status")
-    public ApiResponse<?> toggleStatus(@PathVariable String id) {
-        return ApiResponse.ok(deviceService.toggleStatus(id));
-    }
-
     @GetMapping("/registry")
     public ApiResponse<?> registry(@RequestParam(defaultValue = "false") boolean onlineOnly) {
         return ApiResponse.ok(deviceService.registry(onlineOnly));
     }
 
     @PostMapping("/{id}/force-release")
-    public ApiResponse<?> forceRelease(@PathVariable String id) {
-        boolean released = deviceService.forceRelease(id);
+    public ApiResponse<?> forceRelease(@PathVariable String id, Authentication authentication) {
+        boolean released = deviceService.forceRelease(id, resolveRequesterLabel(authentication));
         return ApiResponse.ok(released);
     }
 
@@ -74,5 +74,23 @@ public class DeviceController {
     }
 
     public record ManualDeviceReq(String ip, String name) {
+    }
+
+    private String resolveRequesterLabel(Authentication authentication) {
+        if (authentication == null || authentication.getName() == null || authentication.getName().isBlank()) {
+            return "其他账户";
+        }
+        User user = userService.findByUsername(authentication.getName());
+        if (user == null) {
+            return "账户（" + authentication.getName() + "）";
+        }
+        if (user.getRole() == UserRole.ADMIN) {
+            return "系统管理员（" + user.getUsername() + "）";
+        }
+        String department = user.getDepartmentName();
+        if (department != null && !department.isBlank()) {
+            return department.trim() + "（" + user.getUsername() + "）";
+        }
+        return "科室账户（" + user.getUsername() + "）";
     }
 }

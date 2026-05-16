@@ -33,7 +33,8 @@ public class FileDetectService {
             MultipartFile imu,
             MultipartFile gas,
             String patientId,
-            String patientName) {
+            String patientName,
+            String taskType) {
 
         validateFile("audio", audio, "wav");
         validateFile("imu", imu, "csv");
@@ -41,8 +42,9 @@ public class FileDetectService {
 
         String normalizedPatientId = normalize(patientId);
         String normalizedPatientName = normalize(patientName);
+        String normalizedTaskType = normalizeTaskType(taskType);
 
-        CaptureSession session = createSession(normalizedPatientId, normalizedPatientName);
+        CaptureSession session = createSession(normalizedPatientId, normalizedPatientName, normalizedTaskType);
         Path sessionDir = fileStorageService.resolveSessionDir(session.getSessionDir());
 
         try {
@@ -58,6 +60,7 @@ public class FileDetectService {
             captureSessionRepository.save(session);
 
             ModelPredictionService.PredictionResult result = modelPredictionService.uploadAndPredict(
+                    normalizedTaskType,
                     audioPath.toFile(),
                     imuPath.toFile(),
                     gasPath.toFile());
@@ -82,7 +85,7 @@ public class FileDetectService {
         }
     }
 
-    private CaptureSession createSession(String patientId, String patientName) {
+    private CaptureSession createSession(String patientId, String patientName, String taskType) {
         String sessionKey = sessionPathResolver.buildSessionKey("file", patientId, patientName);
         Path sessionDir = fileStorageService.ensureSessionDirectory(sessionKey);
         String relativeSessionDir = fileStorageService.toRelativePath(sessionDir);
@@ -95,11 +98,30 @@ public class FileDetectService {
                 .patientNameSnapshot(patientName)
                 .sessionKey(sessionKey)
                 .sessionDir(relativeSessionDir)
-                .inferenceServiceUrl(inferenceProperties.getBaseUrl())
+                .inferenceServiceUrl(inferenceBaseUrlForTask(taskType))
                 .startedAt(now)
                 .build();
 
         return captureSessionRepository.save(session);
+    }
+
+    private String normalizeTaskType(String taskType) {
+        if (taskType == null || taskType.isBlank()) {
+            return "asp";
+        }
+        String normalized = taskType.trim().toLowerCase();
+        if ("dys".equals(normalized)
+                || "dysphagia".equals(normalized)
+                || normalized.contains("吞咽障碍")) {
+            return "dys";
+        }
+        return "asp";
+    }
+
+    private String inferenceBaseUrlForTask(String taskType) {
+        return "dys".equalsIgnoreCase(taskType)
+                ? inferenceProperties.getDysphagiaBaseUrl()
+                : inferenceProperties.getAspirationBaseUrl();
     }
 
     private Map<String, Object> toResponse(String sessionId, String status, ModelPredictionService.PredictionResult result) {

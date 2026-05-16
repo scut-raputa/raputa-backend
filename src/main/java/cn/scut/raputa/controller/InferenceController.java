@@ -36,7 +36,8 @@ public class InferenceController {
             @RequestParam("imu") MultipartFile imu,
             @RequestParam("gas") MultipartFile gas,
             @RequestParam(required = false) String patientId,
-            @RequestParam(required = false) String patientName) {
-        return ApiResponse.ok(fileDetectService.detect(audio, imu, gas, patientId, patientName));
+            @RequestParam(required = false) String patientName,
+            @RequestParam(required = false) String taskType) {
+        return ApiResponse.ok(fileDetectService.detect(audio, imu, gas, patientId, patientName, taskType));
     }
 }

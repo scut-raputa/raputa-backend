@@ -109,6 +109,7 @@ public class RealtimeDataService {
         private Thread audioThread;
         private final AtomicBoolean audioReceiving = new AtomicBoolean(false);
         private String deviceIp;
+        private String taskType = "asp";
         private String audioFilePath;
         private int audioRetryCount = 0; // 音频重试次数
         private static final int MAX_AUDIO_RETRY = 5; // 最大重试次数
@@ -168,7 +169,7 @@ public class RealtimeDataService {
      * 开始连接设备并接收数据
      */
     public CompletableFuture<Boolean> startDataReceiving(String deviceIp, String deviceId) {
-        return startDataReceiving(deviceIp, deviceId, deviceId, "", "")
+        return startDataReceiving(deviceIp, deviceId, deviceId, "", "", "asp")
                 .thenApply(RealtimeConnectResultDTO::isSuccess);
     }
 
@@ -178,12 +179,34 @@ public class RealtimeDataService {
             String deviceName,
             String patientId,
             String patientName) {
+        return startDataReceiving(deviceIp, deviceId, deviceName, patientId, patientName, "asp");
+    }
+
+    public CompletableFuture<RealtimeConnectResultDTO> startDataReceiving(
+            String deviceIp,
+            String deviceId,
+            String deviceName,
+            String patientId,
+            String patientName,
+            String taskType) {
+        return startDataReceiving(deviceIp, deviceId, deviceName, patientId, patientName, taskType, "realtime-connect");
+    }
+
+    public CompletableFuture<RealtimeConnectResultDTO> startDataReceiving(
+            String deviceIp,
+            String deviceId,
+            String deviceName,
+            String patientId,
+            String patientName,
+            String taskType,
+            String holder) {
 
         return CompletableFuture.supplyAsync(() -> {
             Socket socket = null;
             String sessionId = UUID.randomUUID().toString();
+            String normalizedTaskType = normalizeTaskType(taskType);
 
-            DeviceLease existingLease = tryAcquireDeviceLease(deviceId, sessionId, patientId, patientName);
+            DeviceLease existingLease = tryAcquireDeviceLease(deviceId, sessionId, patientId, patientName, holder);
             if (existingLease != null) {
                 DeviceOccupationDTO occupation = toOccupation(existingLease, "设备已被占用，当前会话无法连接");
                 log.warn("设备占用冲突: deviceId={}, occupiedBySession={}, patientId={}",
@@ -196,11 +219,13 @@ public class RealtimeDataService {
                     sessionId,
                     deviceId,
                     patientId,
-                    patientName);
+                    patientName,
+                    normalizedTaskType);
 
                 DeviceConnection connection = new DeviceConnection(deviceId);
                 connection.deviceIp = deviceIp; // 保存IP用于音频RTSP连接
                 connection.sessionId = sessionId;
+                connection.taskType = normalizedTaskType;
 
                 // 1) 先登记会话元信息
                 csvDataService.setSessionMeta(
@@ -247,7 +272,8 @@ public class RealtimeDataService {
                 updateCaptureSessionStatus(sessionId, "PROCESSING", null, null, null);
 
                 deviceConnections.put(deviceId, connection);
-                log.info("设备连接成功: deviceId={}, sessionId={}", deviceId, sessionId);
+                log.info("设备连接成功: deviceId={}, sessionId={}, taskType={}",
+                        deviceId, sessionId, normalizedTaskType);
                 return RealtimeConnectResultDTO.success(deviceId, sessionId);
 
             } catch (Exception e) {
@@ -266,13 +292,26 @@ public class RealtimeDataService {
         });
     }
 
-    private DeviceLease tryAcquireDeviceLease(String deviceId, String sessionId, String patientId, String patientName) {
+    private String normalizeTaskType(String taskType) {
+        if (taskType == null || taskType.isBlank()) {
+            return "asp";
+        }
+        String normalized = taskType.trim().toLowerCase();
+        if ("dys".equals(normalized)
+                || "dysphagia".equals(normalized)
+                || normalized.contains("吞咽障碍")) {
+            return "dys";
+        }
+        return "asp";
+    }
+
+    private DeviceLease tryAcquireDeviceLease(String deviceId, String sessionId, String patientId, String patientName, String holder) {
         DeviceLockService.LockAcquireResult result = deviceLockService.tryAcquire(
                 deviceId,
                 sessionId,
                 patientId == null ? "" : patientId.trim(),
                 patientName == null ? "" : patientName.trim(),
-                "realtime-connect");
+                holder == null || holder.isBlank() ? "realtime-connect" : holder.trim());
 
         if (result.acquired()) {
             return null;
@@ -322,7 +361,8 @@ public class RealtimeDataService {
             String sessionId,
             String deviceId,
             String patientId,
-            String patientName) {
+            String patientName,
+            String taskType) {
         String sessionKey = sessionPathResolver.buildSessionKey("realtime", patientId, patientName);
         Path sessionDir = fileStorageService.ensureSessionDirectory(sessionKey);
         String relativeSessionDir = fileStorageService.toRelativePath(sessionDir);
@@ -337,10 +377,16 @@ public class RealtimeDataService {
                 .sessionKey(sessionKey)
                 .patientNameSnapshot(patientName == null ? "" : patientName.trim())
                 .sessionDir(relativeSessionDir)
-                .inferenceServiceUrl(inferenceProperties.getBaseUrl())
+                .inferenceServiceUrl(inferenceBaseUrlForTask(taskType))
                 .startedAt(now)
                 .build();
         return captureSessionRepository.save(session);
+    }
+
+    private String inferenceBaseUrlForTask(String taskType) {
+        return "dys".equalsIgnoreCase(taskType)
+                ? inferenceProperties.getDysphagiaBaseUrl()
+                : inferenceProperties.getAspirationBaseUrl();
     }
 
     private void updateCaptureSessionStatus(
@@ -529,6 +575,7 @@ public class RealtimeDataService {
             // 调用模型预测
             ModelPredictionService.PredictionResult result = 
                 modelPredictionService.uploadAndPredict(
+                        connection.taskType,
                         audioSegment,
                         imuSegment,
                         gasSegment,

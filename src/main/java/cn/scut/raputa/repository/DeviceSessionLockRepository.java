@@ -11,5 +11,7 @@ public interface DeviceSessionLockRepository extends JpaRepository<DeviceSession
 
     List<DeviceSessionLock> findAllByDeviceIdInAndExpiresAtAfter(Collection<String> deviceIds, LocalDateTime now);
 
+    boolean existsByHolderAndExpiresAtAfter(String holder, LocalDateTime now);
+
     List<DeviceSessionLock> findByExpiresAtBefore(LocalDateTime now);
 }

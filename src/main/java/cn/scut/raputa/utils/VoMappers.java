@@ -9,14 +9,12 @@ import java.time.format.DateTimeParseException;
 import cn.scut.raputa.entity.Appointment;
 import cn.scut.raputa.entity.CheckRecord;
 import cn.scut.raputa.entity.Device;
-import cn.scut.raputa.entity.Doctor;
 import cn.scut.raputa.entity.Model;
 import cn.scut.raputa.entity.Patient;
 import cn.scut.raputa.entity.User;
 import cn.scut.raputa.vo.AppointmentVO;
 import cn.scut.raputa.vo.CheckRecordVO;
 import cn.scut.raputa.vo.DeviceVO;
-import cn.scut.raputa.vo.DoctorVO;
 import cn.scut.raputa.vo.ModelVO;
 import cn.scut.raputa.vo.PatientVO;
 import cn.scut.raputa.vo.UserVO;
@@ -153,16 +151,6 @@ public final class VoMappers {
                 .description(d.getDescription())
                 .storageLocation(d.getStorageLocation())
                 .responsible(d.getResponsible())
-                .build();
-    }
-
-    public static DoctorVO toDoctorVO(Doctor d) {
-        return DoctorVO.builder()
-                .id(d.getId())
-                .name(d.getName())
-                .department(d.getDepartment())
-                .title(d.getTitle())
-                .phone(d.getPhone())
                 .build();
     }
 

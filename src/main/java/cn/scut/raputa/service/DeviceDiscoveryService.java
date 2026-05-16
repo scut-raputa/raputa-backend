@@ -132,6 +132,9 @@ public class DeviceDiscoveryService {
                                 String discoveredDeviceId = discoveredDevice != null
                                         ? discoveredDevice.getId()
                                         : inferDiscoveredId(hardwareId, deviceIp);
+                                String resolvedDeviceName = discoveredDevice != null
+                                        ? discoveredDevice.getName()
+                                        : fallbackDiscoveredDeviceName(deviceName, deviceIp);
                                 String discoveredRtspPath = discoveredDevice != null
                                         ? discoveredDevice.getRtspPath()
                                         : "/stream/audio";
@@ -139,7 +142,7 @@ public class DeviceDiscoveryService {
                                 return new DeviceDiscoveryResponseDTO(
                                     discoveredDeviceId,
                                     deviceIp,
-                                    deviceName,
+                                    resolvedDeviceName,
                                     "ONLINE",
                                     System.currentTimeMillis(),
                                     dataString,
@@ -163,7 +166,8 @@ public class DeviceDiscoveryService {
                 }
             }
             
-            return staticFallbackResponse();
+            markDiscoveryDevicesOffline();
+            return notFoundResponse("未发现设备，请检查设备是否开机并连接到同一网络");
                 
         } catch (SocketException e) {
             log.error("创建UDP Socket失败", e);
@@ -189,26 +193,38 @@ public class DeviceDiscoveryService {
         }
     }
 
-    private DeviceDiscoveryResponseDTO staticFallbackResponse() {
-        return deviceRepository.findFirstByEnabledTrueAndStatusOrderByUpdatedAtDesc("在线")
-                .map(device -> new DeviceDiscoveryResponseDTO(
-                        device.getId(),
-                        device.getIp(),
-                        device.getName(),
-                        "ONLINE",
-                        System.currentTimeMillis(),
-                        "{\"source\":\"STATIC\"}",
-                        device.getRtspPath()
-                ))
-                .orElseGet(() -> new DeviceDiscoveryResponseDTO(
-                        null,
-                        null,
-                        null,
-                        "NOT_FOUND",
-                        System.currentTimeMillis(),
-                        "未发现设备，请检查网络连接",
-                        null
-                ));
+    private DeviceDiscoveryResponseDTO notFoundResponse(String message) {
+        return new DeviceDiscoveryResponseDTO(
+                null,
+                null,
+                null,
+                "NOT_FOUND",
+                System.currentTimeMillis(),
+                message,
+                null
+        );
+    }
+
+    private void markDiscoveryDevicesOffline() {
+        try {
+            List<Device> staleDevices = deviceRepository.findByEnabledTrueOrderByUpdatedAtDesc().stream()
+                    .filter(device -> "在线".equals(device.getStatus()))
+                    .filter(device -> {
+                        String accessMode = device.getAccessMode();
+                        return accessMode == null
+                                || accessMode.isBlank()
+                                || "DISCOVERY".equalsIgnoreCase(accessMode);
+                    })
+                    .toList();
+            if (staleDevices.isEmpty()) {
+                return;
+            }
+            staleDevices.forEach(device -> device.setStatus("离线"));
+            deviceRepository.saveAll(staleDevices);
+            log.info("本次设备发现未收到UDP响应，已将 {} 台发现型设备标记为离线", staleDevices.size());
+        } catch (Exception e) {
+            log.warn("设备发现失败后更新设备离线状态失败", e);
+        }
     }
 
     private Device upsertDiscoveredDevice(String ip, String name, String hardwareId) {
@@ -224,10 +240,8 @@ public class DeviceDiscoveryService {
             if (hardwareId != null && !hardwareId.isBlank()) {
                 device.setHardwareId(hardwareId);
             }
-            if (name != null && !name.isBlank()) {
-                device.setName(name);
-            } else if (device.getName() == null || device.getName().isBlank()) {
-                device.setName("发现设备-" + ip);
+            if (shouldApplyDiscoveredName(device.getName())) {
+                device.setName(fallbackDiscoveredDeviceName(name, ip));
             }
             if (device.getStatus() == null || device.getStatus().isBlank()) {
                 device.setStatus("在线");
@@ -244,6 +258,34 @@ public class DeviceDiscoveryService {
             log.warn("写入发现设备注册表失败: ip={}, hardwareId={}", ip, hardwareId, e);
             return null;
         }
+    }
+
+    private boolean shouldApplyDiscoveredName(String currentName) {
+        if (currentName == null || currentName.isBlank()) {
+            return true;
+        }
+        String normalized = currentName.trim();
+        return "Unknown".equalsIgnoreCase(normalized)
+                || "null".equalsIgnoreCase(normalized)
+                || "-".equals(normalized)
+                || normalized.startsWith("发现设备-");
+    }
+
+    private String fallbackDiscoveredDeviceName(String discoveredName, String ip) {
+        if (isMeaningfulDiscoveredName(discoveredName)) {
+            return discoveredName.trim();
+        }
+        return "发现设备-" + ip;
+    }
+
+    private boolean isMeaningfulDiscoveredName(String discoveredName) {
+        if (discoveredName == null || discoveredName.isBlank()) {
+            return false;
+        }
+        String normalized = discoveredName.trim();
+        return !"Unknown".equalsIgnoreCase(normalized)
+                && !"null".equalsIgnoreCase(normalized)
+                && !"-".equals(normalized);
     }
 
     private String inferDiscoveredId(String hardwareId, String ip) {

@@ -15,6 +15,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDateTime;
@@ -52,7 +53,8 @@ public class RealtimeDataController {
                 description = "连接入参：设备信息 + 患者编号/姓名，用于CSV文件命名",
                 required = true
             )
-            @RequestBody ConnectRequest req) {
+            @RequestBody ConnectRequest req,
+            Authentication authentication) {
 
         // 基本校验（按需加强）
         if (req.deviceIp() == null || req.deviceIp().isBlank()
@@ -62,8 +64,9 @@ public class RealtimeDataController {
             );
         }
 
-        log.info("开始连接设备: {} ({})，设备名: {}，患者: {}-{}",
-                req.deviceId(), req.deviceIp(), req.deviceName(), req.patientId(), req.patientName());
+        log.info("开始连接设备: {} ({})，设备名: {}，患者: {}-{}，任务: {}",
+                req.deviceId(), req.deviceIp(), req.deviceName(), req.patientId(), req.patientName(), req.taskType());
+        String holder = authentication == null ? "anonymous" : authentication.getName();
 
         // 关键：使用带会话元信息的重载，确保 CSV 首次创建就用新命名
         return realtimeDataService
@@ -71,7 +74,9 @@ public class RealtimeDataController {
                                     req.deviceId(),
                                     req.deviceName(),
                                     req.patientId(),
-                                    req.patientName())
+                                    req.patientName(),
+                                    req.taskType(),
+                                    holder)
                 .thenApply(result -> {
                     String message = result.isSuccess()
                             ? "设备连接成功，开始接收数据"
@@ -421,7 +426,8 @@ public class RealtimeDataController {
         String deviceId,
         String deviceName,
         String patientId,
-        String patientName
+        String patientName,
+        String taskType
     ) {}
 
     public record SegmentationModeRequest(

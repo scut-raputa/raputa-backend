@@ -489,7 +489,7 @@ public class CsvDataService {
      * 为避免文件锁冲突，创建临时副本而不是直接使用原文件
      * 
      * @param deviceId 设备ID
-     * @param seconds 时长(秒) - 暂时忽略，返回整个文件
+     * @param seconds 时长(秒)
      * @return 音频WAV文件（临时副本）
      */
     public File exportAudioSegment(String deviceId, int seconds) {
@@ -507,13 +507,12 @@ public class CsvDataService {
                 return null;
             }
             
-            // 创建临时副本，避免文件锁冲突
+            // 创建临时片段，避免文件锁冲突
             String tempFileName = String.format("audio_segment_%d.wav", System.currentTimeMillis());
             Path tempPath = Paths.get(sessionFolder, tempFileName);
-            
-            // 复制文件（使用 Files.copy 而不是直接读写，更安全）
-            Files.copy(audioPath, tempPath, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-            
+
+            WavFileUtils.writeLastSecondsAsCleanWav(audioPath, tempPath, Math.max(seconds, 1));
+
             log.info("创建音频临时副本: {} (大小: {} bytes)", tempFileName, Files.size(tempPath));
             return tempPath.toFile();
             
@@ -522,7 +521,7 @@ public class CsvDataService {
             return null;
         }
     }
-    
+
     /**
      * 解析时间戳，如果失败尝试倒数第二条
      */

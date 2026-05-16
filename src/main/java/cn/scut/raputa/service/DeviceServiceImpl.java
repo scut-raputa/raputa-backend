@@ -16,6 +16,8 @@ import java.time.*;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 @Service
@@ -24,8 +26,11 @@ public class DeviceServiceImpl implements DeviceService {
 
     private final DeviceRepository deviceRepository;
     private final DeviceLockService deviceLockService;
+    private final WebSocketService webSocketService;
+    private final RealtimeDataService realtimeDataService;
     private static final ZoneId ZONE_CN = ZoneId.of("Asia/Shanghai");
     private static final DateTimeFormatter DTMF = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final int FORCE_RELEASE_FALLBACK_SECONDS = 45;
 
     @Override
     public Page<DeviceVO> page(int page, int size, String id, String name,
@@ -53,7 +58,7 @@ public class DeviceServiceImpl implements DeviceService {
     public DeviceVO create(DeviceDTO dto) {
         Device device = new Device();
         device.setId(generateId());
-        applyDto(device, dto);
+        applyCreateDto(device, dto);
         return enrichSingle(deviceRepository.save(device));
     }
 
@@ -61,7 +66,7 @@ public class DeviceServiceImpl implements DeviceService {
     public DeviceVO update(String id, DeviceDTO dto) {
         Device device = deviceRepository.findById(id)
                 .orElseThrow(() -> new BizException(404, "设备不存在"));
-        applyDto(device, dto);
+        applyUpdateDto(device, dto);
         return enrichSingle(deviceRepository.save(device));
     }
 
@@ -70,20 +75,6 @@ public class DeviceServiceImpl implements DeviceService {
         if (!deviceRepository.existsById(id))
             throw new BizException(404, "设备不存在");
         deviceRepository.deleteById(id);
-    }
-
-    @Override
-    public DeviceVO toggleStatus(String id) {
-        Device device = deviceRepository.findById(id)
-                .orElseThrow(() -> new BizException(404, "设备不存在"));
-        if ("在线".equals(device.getStatus())) {
-            device.setStatus("离线");
-        } else {
-            device.setStatus("在线");
-            device.setLastConnectedTime(LocalDateTime.now(ZONE_CN));
-            device.setLastSeenAt(LocalDateTime.now(ZONE_CN));
-        }
-        return enrichSingle(deviceRepository.save(device));
     }
 
     @Override
@@ -96,8 +87,25 @@ public class DeviceServiceImpl implements DeviceService {
     }
 
     @Override
-    public boolean forceRelease(String id) {
-        return deviceLockService.release(id, null, "admin-force-release", true);
+    public boolean forceRelease(String id, String requesterLabel) {
+        DeviceSessionLock lock = deviceLockService.getActiveLock(id);
+        if (lock == null) {
+            return true;
+        }
+        String requester = requesterLabel == null || requesterLabel.isBlank()
+                ? "其他账户"
+                : requesterLabel.trim();
+        webSocketService.pushDeviceControl(id, Map.of(
+                "type", "FORCE_RELEASE_REQUEST",
+                "deviceId", id,
+                "sessionId", lock.getSessionId(),
+                "reason", requester + "请求释放当前设备会话",
+                "requester", requester,
+                "timeoutSeconds", FORCE_RELEASE_FALLBACK_SECONDS,
+                "requestedAt", LocalDateTime.now(ZONE_CN).format(DTMF)
+        ));
+        scheduleForceStopFallback(id, lock.getSessionId());
+        return true;
     }
 
     @Override
@@ -123,8 +131,8 @@ public class DeviceServiceImpl implements DeviceService {
         return enrichSingle(deviceRepository.save(device));
     }
 
-    private void applyDto(Device device, DeviceDTO dto) {
-        device.setName(dto.getName());
+    private void applyCreateDto(Device device, DeviceDTO dto) {
+        device.setName(trimOrFallback(dto.getName(), "未命名设备"));
         device.setIp(normalizeIp(dto.getIp()));
         String hardwareId = normalizeHardwareId(dto.getHardwareId());
         assertHardwareUnique(hardwareId, device.getId());
@@ -161,6 +169,26 @@ public class DeviceServiceImpl implements DeviceService {
         }
     }
 
+    private void applyUpdateDto(Device device, DeviceDTO dto) {
+        if (dto.getName() != null && !dto.getName().isBlank()) {
+            device.setName(dto.getName().trim());
+        }
+
+        // 硬件标识由设备发现/注册流程维护，普通编辑接口不接受手动变更。
+        device.setDescription(trimToNull(dto.getDescription()));
+        device.setStorageLocation(trimToNull(dto.getStorageLocation()));
+    }
+
+    private void scheduleForceStopFallback(String deviceId, String sessionId) {
+        CompletableFuture.delayedExecutor(FORCE_RELEASE_FALLBACK_SECONDS, TimeUnit.SECONDS).execute(() -> {
+            DeviceSessionLock current = deviceLockService.getActiveLock(deviceId);
+            if (current == null || !java.util.Objects.equals(sessionId, current.getSessionId())) {
+                return;
+            }
+            realtimeDataService.stopDataReceiving(deviceId);
+        });
+    }
+
     private LocalDateTime parseDateTime(String s) {
         if (s == null || s.isBlank()) return null;
         try { return LocalDateTime.parse(s, DateTimeFormatter.ISO_LOCAL_DATE_TIME); } catch (Exception ignored) {}
@@ -172,6 +200,17 @@ public class DeviceServiceImpl implements DeviceService {
     private String normalizeIp(String ip) {
         if (ip == null || ip.isBlank()) return "0.0.0.0";
         return ip.trim();
+    }
+
+    private String trimOrFallback(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value.trim();
+    }
+
+    private String trimToNull(String value) {
+        if (value == null || value.isBlank()) {
+            return null;
+        }
+        return value.trim();
     }
 
     private String normalizeHardwareId(String hardwareId) {
