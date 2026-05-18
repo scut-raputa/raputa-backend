@@ -10,8 +10,5 @@ import java.util.List;
 public interface CheckRecordRepository
         extends JpaRepository<CheckRecord, Long>, JpaSpecificationExecutor<CheckRecord> {
 
-    /**
-     * 查询指定时间范围内的检查记录
-     */
     List<CheckRecord> findByCheckTimeBetween(LocalDateTime startTime, LocalDateTime endTime);
 }

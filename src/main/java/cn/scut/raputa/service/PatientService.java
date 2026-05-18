@@ -16,11 +16,7 @@ public interface PatientService {
 
     PatientVO create(PatientCreateDTO dto);
 
-    //PatientVO updateDeptAndAddress(String id, String dept, String address);
-
     void deleteById(String id);
-
-    //PatientVO updateDept(String id, @NotBlank String dept);
 
     PatientVO update(String id, PatientCreateDTO dto);
 }

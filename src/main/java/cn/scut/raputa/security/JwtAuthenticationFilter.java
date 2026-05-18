@@ -3,6 +3,7 @@ package cn.scut.raputa.security;
 import cn.scut.raputa.entity.User;
 import cn.scut.raputa.repository.UserRepository;
 import cn.scut.raputa.utils.JwtService;
+import cn.scut.raputa.utils.UserSessionStatus;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
@@ -19,6 +20,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Component
@@ -42,6 +44,11 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             String username = jwtService.extractUsername(token);
             User user = userRepository.findByUsername(username);
             if (user != null && Boolean.TRUE.equals(user.getEnabled())) {
+                LocalDateTime now = LocalDateTime.now(User.ZONE_CN);
+                userRepository.touchSeenIfStale(
+                        user.getId(),
+                        now,
+                        now.minusSeconds(UserSessionStatus.TOUCH_INTERVAL_SECONDS));
                 String roleName = user.getRole() == null ? "DEPARTMENT" : user.getRole().name();
                 String authority = "ROLE_" + roleName;
                 UsernamePasswordAuthenticationToken authentication =

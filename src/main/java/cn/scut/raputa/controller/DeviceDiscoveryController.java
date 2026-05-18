@@ -18,11 +18,6 @@ import org.springframework.web.bind.annotation.*;
 
 import java.util.concurrent.CompletableFuture;
 
-/**
- * 设备发现控制器
- * 
- * @author RAPUTA Team
- */
 @RestController
 @RequestMapping("/api/device")
 @RequiredArgsConstructor
@@ -43,9 +38,9 @@ public class DeviceDiscoveryController {
     public CompletableFuture<ResponseEntity<ApiResponse<DeviceDiscoveryResponseDTO>>> discoverDevice(
             @Parameter(description = "设备发现参数", required = true)
             @RequestBody @Valid DeviceDiscoveryDTO request) {
-        
+
         log.info("开始设备发现，端口: {}, 超时: {}ms", request.getPort(), request.getTimeout());
-        
+
         return deviceDiscoveryService.startDeviceDiscovery(request)
                 .thenApply(result -> {
                     if ("ONLINE".equals(result.getStatus())) {
@@ -87,7 +82,7 @@ public class DeviceDiscoveryController {
     public ResponseEntity<ApiResponse<Boolean>> getDiscoveryStatus() {
         try {
             boolean isDiscovering = deviceDiscoveryService.isDiscovering();
-            return ResponseEntity.ok(ApiResponse.ok(isDiscovering, 
+            return ResponseEntity.ok(ApiResponse.ok(isDiscovering,
                 isDiscovering ? "设备发现正在进行中" : "设备发现已停止"));
         } catch (Exception e) {
             log.error("获取设备发现状态失败", e);
@@ -103,14 +98,14 @@ public class DeviceDiscoveryController {
             @io.swagger.v3.oas.annotations.responses.ApiResponse(responseCode = "500", description = "服务器内部错误")
     })
     public CompletableFuture<ResponseEntity<ApiResponse<DeviceDiscoveryResponseDTO>>> quickDiscoverDevice() {
-        // 使用默认参数
+
         DeviceDiscoveryDTO defaultRequest = new DeviceDiscoveryDTO();
         defaultRequest.setPort(6666);
         defaultRequest.setTimeout(5000);
         defaultRequest.setScanInterval(20);
-        
+
         log.info("开始快速设备发现");
-        
+
         return deviceDiscoveryService.startDeviceDiscovery(defaultRequest)
                 .thenApply(result -> {
                     if ("ONLINE".equals(result.getStatus())) {

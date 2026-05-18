@@ -19,9 +19,6 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.stream.Collectors;
 
-/**
- * 统计服务
- */
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -34,11 +31,8 @@ public class StatsService {
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd");
     private static final String[] WEEKDAYS = {"周日", "周一", "周二", "周三", "周四", "周五", "周六"};
 
-    /**
-     * 获取统计数据
-     */
     public StatsDTO.StatsResponse getStats(StatsDTO.StatsQuery query) {
-        // 确定日期范围
+
         LocalDate endDate = query.getEndDate() != null
             ? LocalDate.parse(query.getEndDate(), DATE_FORMATTER)
             : LocalDate.now();
@@ -50,7 +44,6 @@ public class StatsService {
 
         log.info("获取统计数据: startDate={}, endDate={}", startDate, endDate);
 
-        // 获取各项统计数据
         List<StatsDTO.DailyPatientCount> dailyPatientCount = getDailyPatientCount(startDate, endDate);
         List<StatsDTO.DailyCheckResult> dailyCheckResult = getDailyCheckResult(startDate, endDate);
         List<StatsDTO.DeptPatientCount> deptPatientCount = getDeptPatientCount(startDate, endDate);
@@ -64,24 +57,18 @@ public class StatsService {
         );
     }
 
-    /**
-     * 获取每日检测患者数量
-     */
     private List<StatsDTO.DailyPatientCount> getDailyPatientCount(LocalDate startDate, LocalDate endDate) {
         LocalDateTime startDateTime = startDate.atStartOfDay();
         LocalDateTime endDateTime = endDate.plusDays(1).atStartOfDay();
 
-        // 查询时间范围内的所有检查记录
         List<CheckRecord> records = checkRecordRepository.findByCheckTimeBetween(startDateTime, endDateTime);
 
-        // 按日期统计不同患者数，避免同一次检测产生多条结果记录后重复计数
         Map<LocalDate, Long> countByDate = records.stream()
             .collect(Collectors.groupingBy(
                 record -> record.getCheckTime().toLocalDate(),
                 Collectors.mapping(CheckRecord::getPatientId, Collectors.collectingAndThen(Collectors.toSet(), set -> (long) set.size()))
             ));
 
-        // 生成完整的日期序列
         List<StatsDTO.DailyPatientCount> result = new ArrayList<>();
         LocalDate current = startDate;
         while (!current.isAfter(endDate)) {
@@ -94,17 +81,12 @@ public class StatsService {
         return result;
     }
 
-    /**
-     * 获取每日患者检测结果情况
-     */
     private List<StatsDTO.DailyCheckResult> getDailyCheckResult(LocalDate startDate, LocalDate endDate) {
         LocalDateTime startDateTime = startDate.atStartOfDay();
         LocalDateTime endDateTime = endDate.plusDays(1).atStartOfDay();
 
-        // 查询时间范围内的所有检查记录
         List<CheckRecord> records = checkRecordRepository.findByCheckTimeBetween(startDateTime, endDateTime);
 
-        // 按日期和结果分组统计
         Map<LocalDate, Map<CheckResult, Long>> countByDateAndResult = records.stream()
             .collect(Collectors.groupingBy(
                 record -> record.getCheckTime().toLocalDate(),
@@ -114,7 +96,6 @@ public class StatsService {
                 )
             ));
 
-        // 生成完整的日期序列
         List<StatsDTO.DailyCheckResult> result = new ArrayList<>();
         LocalDate current = startDate;
         while (!current.isAfter(endDate)) {
@@ -135,9 +116,6 @@ public class StatsService {
         return result;
     }
 
-    /**
-     * 获取各科室患者占比
-     */
     private List<StatsDTO.DeptPatientCount> getDeptPatientCount(LocalDate startDate, LocalDate endDate) {
         LocalDateTime startDateTime = startDate.atStartOfDay();
         LocalDateTime endDateTime = endDate.plusDays(1).atStartOfDay();
@@ -174,16 +152,12 @@ public class StatsService {
         Map<String, Long> countByDept = deptByPatient.values().stream()
                 .collect(Collectors.groupingBy(dept -> dept, Collectors.counting()));
 
-        // 转换为结果列表并按数量降序排序
         return countByDept.entrySet().stream()
             .map(entry -> new StatsDTO.DeptPatientCount(entry.getKey(), entry.getValue().intValue()))
             .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
             .collect(Collectors.toList());
     }
 
-    /**
-     * 获取设备使用时长
-     */
     private List<StatsDTO.DeviceUsage> getDeviceUsage(LocalDate startDate, LocalDate endDate) {
         LocalDateTime startDateTime = startDate.atStartOfDay();
         LocalDateTime endDateTime = endDate.plusDays(1).atStartOfDay();
@@ -220,25 +194,22 @@ public class StatsService {
             }
         }
 
-        // 转换为结果列表
         List<StatsDTO.DeviceUsage> result = new ArrayList<>();
         for (Map.Entry<String, Map<LocalDate, Double>> entry : usageByDeviceAndDate.entrySet()) {
             String deviceId = entry.getKey();
             Map<LocalDate, Double> dateUsageMap = entry.getValue();
 
-            // 生成完整的日期序列
             List<Double> usageMinutes = new ArrayList<>();
             LocalDate current = startDate;
             while (!current.isAfter(endDate)) {
                 Double minutes = dateUsageMap.getOrDefault(current, 0.0);
-                usageMinutes.add(Math.round(minutes * 10.0) / 10.0); // 保留1位小数
+                usageMinutes.add(Math.round(minutes * 10.0) / 10.0);
                 current = current.plusDays(1);
             }
 
             result.add(new StatsDTO.DeviceUsage(deviceId, usageMinutes));
         }
 
-        // 按设备ID排序
         result.sort(Comparator.comparing(StatsDTO.DeviceUsage::getDeviceId));
 
         return result;
@@ -265,19 +236,15 @@ public class StatsService {
         return a.isAfter(b) ? a : b;
     }
 
-    /**
-     * 格式化日期类别标签
-     * 如果日期范围<=7天，使用星期几；否则使用日期
-     */
     private String formatDateCategory(LocalDate date, LocalDate startDate, LocalDate endDate) {
         long daysBetween = ChronoUnit.DAYS.between(startDate, endDate) + 1;
 
         if (daysBetween <= 7) {
-            // 使用星期几
-            int dayOfWeek = date.getDayOfWeek().getValue() % 7; // 转换为0-6 (周日为0)
+
+            int dayOfWeek = date.getDayOfWeek().getValue() % 7;
             return WEEKDAYS[dayOfWeek];
         } else {
-            // 使用日期
+
             return date.format(DateTimeFormatter.ofPattern("MM-dd"));
         }
     }

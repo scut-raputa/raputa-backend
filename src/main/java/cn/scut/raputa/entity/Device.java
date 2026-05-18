@@ -12,9 +12,8 @@ import java.time.ZoneId;
         @Index(name = "idx_device_name", columnList = "name"),
         @Index(name = "idx_device_status", columnList = "status"),
         @Index(name = "idx_device_hardware_id", columnList = "hardware_id"),
-    @Index(name = "idx_device_enabled", columnList = "enabled"),
-    @Index(name = "idx_device_access_mode", columnList = "access_mode"),
-        @Index(name = "idx_device_responsible", columnList = "responsible"),
+        @Index(name = "idx_device_enabled", columnList = "enabled"),
+        @Index(name = "idx_device_access_mode", columnList = "access_mode"),
         @Index(name = "idx_device_storage_location", columnList = "storage_location")
 })
 public class Device {
@@ -52,7 +51,6 @@ public class Device {
     @Column(name = "enabled", nullable = false)
     private Boolean enabled;
 
-    /** "在线" or "离线" */
     @Column(nullable = false, length = 10)
     private String status;
 
@@ -61,9 +59,6 @@ public class Device {
 
     @Column(name = "storage_location", length = 128)
     private String storageLocation;
-
-    @Column(length = 64)
-    private String responsible;
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;

@@ -26,10 +26,9 @@ public class DeviceController {
             @RequestParam(defaultValue = "8") int size,
             @RequestParam(required = false) String id,
             @RequestParam(required = false) String name,
-            @RequestParam(required = false) String responsible,
             @RequestParam(required = false) String status,
             @RequestParam(required = false) String storageLocation) {
-        Page<DeviceVO> pg = deviceService.page(page, size, id, name, responsible, status, storageLocation);
+        Page<DeviceVO> pg = deviceService.page(page, size, id, name, status, storageLocation);
         return ApiResponse.ok(new PageWrap<>(pg.getContent(), pg.getTotalElements()));
     }
 
@@ -38,20 +37,9 @@ public class DeviceController {
         return ApiResponse.ok(deviceService.distinctLocations());
     }
 
-    @PostMapping
-    public ApiResponse<?> create(@RequestBody DeviceDTO dto) {
-        return ApiResponse.ok(deviceService.create(dto));
-    }
-
     @PutMapping("/{id}")
     public ApiResponse<?> update(@PathVariable String id, @RequestBody DeviceDTO dto) {
         return ApiResponse.ok(deviceService.update(id, dto));
-    }
-
-    @DeleteMapping("/{id}")
-    public ApiResponse<?> delete(@PathVariable String id) {
-        deviceService.delete(id);
-        return ApiResponse.ok(null);
     }
 
     @GetMapping("/registry")

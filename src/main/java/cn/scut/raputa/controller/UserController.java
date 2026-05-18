@@ -90,7 +90,10 @@ public class UserController {
 
     @PostMapping("/logout")
     @Operation(summary = "用户登出", description = "清理服务端会话 Cookie")
-    public ApiResponse<Void> logout(HttpServletResponse response) {
+    public ApiResponse<Void> logout(Authentication authentication, HttpServletResponse response) {
+        if (authentication != null && authentication.isAuthenticated()) {
+            userService.markLoggedOut(authentication.getName());
+        }
         response.addHeader(HttpHeaders.SET_COOKIE, expiredSessionCookie().toString());
         return ApiResponse.ok(null);
     }

@@ -57,7 +57,7 @@ public class AppointmentServiceImpl implements AppointmentService {
             if (d == null || d.isEmpty())
                 return null;
             LocalDate day = LocalDate.parse(d);
-            // 修复：直接使用 LocalDate 进行相等比较
+
             return cb.equal(root.get(field), day);
         };
     }
@@ -75,12 +75,10 @@ public class AppointmentServiceImpl implements AppointmentService {
         };
     }
 
-
     @Override
     public AppointmentVO create(AppointmentCreateDTO dto) {
         validateApptTime(dto.getTime());
 
-        // 修复：使用 UUID 确保唯一性，避免并发问题
         String outpatientId = generateUniqueId();
 
         Appointment a = new Appointment();
@@ -98,16 +96,13 @@ public class AppointmentServiceImpl implements AppointmentService {
 
     }
 
-    // 添加新方法：生成唯一 ID
     private String generateUniqueId() {
         LocalDate today = LocalDate.now();
         String datePart = today.format(java.time.format.DateTimeFormatter.BASIC_ISO_DATE);
 
-        // 使用 UUID 的一部分确保唯一性
         String uniquePart = UUID.randomUUID().toString().substring(0, 8).toUpperCase();
         return "O" + datePart + uniquePart;
     }
-
 
     @Override
     public AppointmentVO update(String id, AppointmentUpdateDTO dto) {

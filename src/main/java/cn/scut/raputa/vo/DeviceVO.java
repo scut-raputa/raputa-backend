@@ -20,7 +20,6 @@ public class DeviceVO {
     private Boolean enabled;
     private String description;
     private String storageLocation;
-    private String responsible;
     private Boolean occupied;
     private String occupiedSessionId;
     private String occupiedPatientId;

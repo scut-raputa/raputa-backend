@@ -1,4 +1,3 @@
-// cn/scut/raputa/controller/ReportController.java
 package cn.scut.raputa.controller;
 
 import cn.scut.raputa.entity.CaptureSession;
@@ -62,17 +61,14 @@ public class ReportController {
                 Files.createDirectories(sessionFolder);
             }
 
-            // 2. 生成报告文件名，例如 report_20251126_203011.pdf
             String ts = LocalDateTime.now().format(SESSION_TS);
             String filename = "report_" + ts + ".pdf";
             Path dest = sessionFolder.resolve(filename);
 
-            // 3. 保存 PDF 文件
             try (InputStream in = file.getInputStream()) {
                 Files.copy(in, dest, StandardCopyOption.REPLACE_EXISTING);
             }
 
-            // 4. 写入 PatientFile
             patientFileService.record(
                     patientId,
                     sessionId,

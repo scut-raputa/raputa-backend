@@ -34,11 +34,10 @@ public class DeviceServiceImpl implements DeviceService {
 
     @Override
     public Page<DeviceVO> page(int page, int size, String id, String name,
-                               String responsible, String status, String storageLocation) {
+                               String status, String storageLocation) {
         Specification<Device> spec = Specification.<Device>unrestricted()
                 .and(likeIfPresent("id", id))
                 .and(likeIfPresent("name", name))
-                .and(likeIfPresent("responsible", responsible))
                 .and(eqIfPresent("status", status))
                 .and(eqIfPresent("storageLocation", storageLocation));
 
@@ -55,26 +54,11 @@ public class DeviceServiceImpl implements DeviceService {
     }
 
     @Override
-    public DeviceVO create(DeviceDTO dto) {
-        Device device = new Device();
-        device.setId(generateId());
-        applyCreateDto(device, dto);
-        return enrichSingle(deviceRepository.save(device));
-    }
-
-    @Override
     public DeviceVO update(String id, DeviceDTO dto) {
         Device device = deviceRepository.findById(id)
                 .orElseThrow(() -> new BizException(404, "设备不存在"));
         applyUpdateDto(device, dto);
         return enrichSingle(deviceRepository.save(device));
-    }
-
-    @Override
-    public void delete(String id) {
-        if (!deviceRepository.existsById(id))
-            throw new BizException(404, "设备不存在");
-        deviceRepository.deleteById(id);
     }
 
     @Override
@@ -131,50 +115,11 @@ public class DeviceServiceImpl implements DeviceService {
         return enrichSingle(deviceRepository.save(device));
     }
 
-    private void applyCreateDto(Device device, DeviceDTO dto) {
-        device.setName(trimOrFallback(dto.getName(), "未命名设备"));
-        device.setIp(normalizeIp(dto.getIp()));
-        String hardwareId = normalizeHardwareId(dto.getHardwareId());
-        assertHardwareUnique(hardwareId, device.getId());
-        device.setHardwareId(hardwareId);
-        device.setStatus(dto.getStatus() != null ? dto.getStatus() : "离线");
-        if (dto.getAccessMode() != null && !dto.getAccessMode().isBlank()) {
-            device.setAccessMode(normalizeAccessMode(dto.getAccessMode()));
-        } else if (device.getAccessMode() == null || device.getAccessMode().isBlank()) {
-            device.setAccessMode("DISCOVERY");
-        }
-        if (dto.getControlPort() != null && dto.getControlPort() > 0) {
-            device.setControlPort(dto.getControlPort());
-        } else if (device.getControlPort() == null || device.getControlPort() <= 0) {
-            device.setControlPort(6667);
-        }
-        if (dto.getRtspPath() != null && !dto.getRtspPath().isBlank()) {
-            device.setRtspPath(dto.getRtspPath().trim());
-        } else if (device.getRtspPath() == null || device.getRtspPath().isBlank()) {
-            device.setRtspPath("/stream/audio");
-        }
-        if (dto.getEnabled() != null) {
-            device.setEnabled(dto.getEnabled());
-        } else if (device.getEnabled() == null) {
-            device.setEnabled(Boolean.TRUE);
-        }
-        device.setDescription(dto.getDescription());
-        device.setStorageLocation(dto.getStorageLocation());
-        device.setResponsible(dto.getResponsible());
-        if (dto.getLastConnectedTime() != null) {
-            device.setLastConnectedTime(parseDateTime(dto.getLastConnectedTime()));
-        }
-        if ("在线".equals(device.getStatus())) {
-            device.setLastSeenAt(LocalDateTime.now(ZONE_CN));
-        }
-    }
-
     private void applyUpdateDto(Device device, DeviceDTO dto) {
         if (dto.getName() != null && !dto.getName().isBlank()) {
             device.setName(dto.getName().trim());
         }
 
-        // 硬件标识由设备发现/注册流程维护，普通编辑接口不接受手动变更。
         device.setDescription(trimToNull(dto.getDescription()));
         device.setStorageLocation(trimToNull(dto.getStorageLocation()));
     }
@@ -189,21 +134,9 @@ public class DeviceServiceImpl implements DeviceService {
         });
     }
 
-    private LocalDateTime parseDateTime(String s) {
-        if (s == null || s.isBlank()) return null;
-        try { return LocalDateTime.parse(s, DateTimeFormatter.ISO_LOCAL_DATE_TIME); } catch (Exception ignored) {}
-        try { return LocalDateTime.parse(s, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")); } catch (Exception ignored) {}
-        try { return LocalDateTime.parse(s, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")); } catch (Exception ignored) {}
-        return null;
-    }
-
     private String normalizeIp(String ip) {
         if (ip == null || ip.isBlank()) return "0.0.0.0";
         return ip.trim();
-    }
-
-    private String trimOrFallback(String value, String fallback) {
-        return value == null || value.isBlank() ? fallback : value.trim();
     }
 
     private String trimToNull(String value) {
@@ -211,43 +144,6 @@ public class DeviceServiceImpl implements DeviceService {
             return null;
         }
         return value.trim();
-    }
-
-    private String normalizeHardwareId(String hardwareId) {
-        if (hardwareId == null || hardwareId.isBlank()) {
-            return null;
-        }
-        return hardwareId.trim().toUpperCase();
-    }
-
-    private void assertHardwareUnique(String hardwareId, String currentId) {
-        if (hardwareId == null || hardwareId.isBlank()) {
-            return;
-        }
-        deviceRepository.findFirstByHardwareId(hardwareId)
-                .filter(existing -> !existing.getId().equals(currentId))
-                .ifPresent(existing -> {
-                    throw new BizException(409, "硬件标识已绑定设备：" + existing.getId());
-                });
-    }
-
-    private String normalizeAccessMode(String accessMode) {
-        if (accessMode == null || accessMode.isBlank()) {
-            return "DISCOVERY";
-        }
-        String mode = accessMode.trim().toUpperCase();
-        if (!"DISCOVERY".equals(mode) && !"STATIC".equals(mode) && !"MANUAL".equals(mode)) {
-            return "DISCOVERY";
-        }
-        return mode;
-    }
-
-    private String generateId() {
-        for (int i = 1; i <= 9999; i++) {
-            String id = "DEV-" + String.format("%03d", i);
-            if (!deviceRepository.existsById(id)) return id;
-        }
-        throw new BizException(500, "生成设备编号失败");
     }
 
     private String generateManualId(String ip) {

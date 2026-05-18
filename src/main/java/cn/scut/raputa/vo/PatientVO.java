@@ -16,11 +16,10 @@ public class PatientVO {
     private String birth;
     private String admit;
     private String dept;
-    //private String address;
     private Boolean checked;
     private String idCard;
-    private LocalDate onsetDate; // 发病日期
-    private String pastHistory; // 既往史
-    private String bedNumber; // 病床号
-    private String course; // 病程
+    private LocalDate onsetDate;
+    private String pastHistory;
+    private String bedNumber;
+    private String course;
 }

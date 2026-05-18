@@ -52,7 +52,7 @@ raputa:
     heartbeat-interval-seconds: 15
     cleaner-interval-seconds: 30
 
-# SpringDoc OpenAPI 配置
+# SpringDoc OpenAPI
 springdoc:
   api-docs:
     path: /api-docs
@@ -66,3 +66,7 @@ springdoc:
     showExtensions: true
     showCommonExtensions: true
   show-actuator: false
+
+logging:
+  level:
+    org.hibernate.orm.connections.pooling: warn

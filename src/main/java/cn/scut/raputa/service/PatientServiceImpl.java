@@ -41,7 +41,6 @@ public class PatientServiceImpl implements PatientService {
                 .and(eqIfPresent("admit", parseDateOrNull(admit)))
                 .and(boolIfPresent("checked", checked));
 
-
         Page<Patient> pg = patientRepository.findAll(
                 spec,
                 PageRequest.of(
@@ -82,9 +81,7 @@ public class PatientServiceImpl implements PatientService {
         p.setOutpatientId(outpatientId);
         p.setName(dto.getName().trim());
         p.setGender(gender);
-        //p.setBirth(dto.getBirth());
         p.setDept(dto.getDept().trim());
-        //p.setAddress(dto.getAddress().trim());
         p.setChecked(false);
         p.setAdmit(today);
         p.setCourse(dto.getCourse().trim());
@@ -124,7 +121,6 @@ public class PatientServiceImpl implements PatientService {
             throw new BizException(400, "姓名、性别和身份证号码已建档，不能在此处修改");
         }
 
-        // 仅更新临床和住院过程信息；身份信息必须保持建档值。
         p.setDept(dto.getDept().trim());
         p.setOnsetDate(dto.getOnsetDate());
         p.setPastHistory(dto.getPastHistory() == null ? null : dto.getPastHistory().trim());
@@ -211,6 +207,5 @@ public class PatientServiceImpl implements PatientService {
         char expected = ID_CARD_CHECKSUM[sum % 11];
         return upper.charAt(17) == expected;
     }
-
 
 }

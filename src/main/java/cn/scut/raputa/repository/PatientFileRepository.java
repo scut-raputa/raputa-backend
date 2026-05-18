@@ -1,4 +1,3 @@
-// cn/scut/raputa/repository/PatientFileRepository.java
 package cn.scut.raputa.repository;
 
 import cn.scut.raputa.entity.PatientFile;
@@ -18,10 +17,6 @@ public interface PatientFileRepository extends JpaRepository<PatientFile, Patien
 
     List<PatientFile> findAllByFileIdIn(Collection<String> fileIds);
 
-    /**
-     * 查询设备使用统计数据
-     * 返回: [sessionKey, savedAt, fileCount]
-     */
         @Query("SELECT pf.sessionId, pf.savedAt, COUNT(pf) " +
            "FROM PatientFile pf " +
            "WHERE pf.savedAt BETWEEN :startTime AND :endTime " +

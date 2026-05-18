@@ -26,7 +26,7 @@ public class Patient {
     private String outpatientId;
 
     @Column(name = "id_card", length = 18, unique = true)
-    private String idCard;//身份证号
+    private String idCard;
 
     @Column(nullable = false, length = 64)
     private String name;
@@ -38,7 +38,7 @@ public class Patient {
     private LocalDate admit;
 
     @Column(name = "onset_date")
-    private LocalDate onsetDate; // 发病日期
+    private LocalDate onsetDate;
 
     @Column(length = 128)
     private String dept;
@@ -47,13 +47,13 @@ public class Patient {
     private String address;
 
     @Column(name = "past_history", length = 2048)
-    private String pastHistory; // 既往史
+    private String pastHistory;
 
     @Column(name = "bed_number", length = 32)
-    private String bedNumber; // 病床号
+    private String bedNumber;
 
     @Column(length = 2048)
-    private String course; // 病程
+    private String course;
 
     @Column(nullable = false)
     private boolean checked;

@@ -9,6 +9,8 @@ import cn.scut.raputa.exception.BizException;
 import cn.scut.raputa.repository.UserRepository;
 import cn.scut.raputa.response.ApiResponse;
 import cn.scut.raputa.service.DeviceLockService;
+import cn.scut.raputa.utils.AvatarUrls;
+import cn.scut.raputa.utils.UserSessionStatus;
 import cn.scut.raputa.utils.VoMappers;
 import cn.scut.raputa.vo.UserVO;
 import lombok.RequiredArgsConstructor;
@@ -71,7 +73,7 @@ public class AdminUserController {
         user.setDepartmentName(requireText(dto.getDepartmentName(), "请输入科室名称"));
         user.setRole(dto.getRole() == null ? UserRole.DEPARTMENT : dto.getRole());
         user.setEnabled(Boolean.TRUE);
-        user.setAvatarUrl("/images/default-avatar.png");
+        user.setAvatarUrl(AvatarUrls.forRole(user.getRole()));
         return ApiResponse.ok(VoMappers.toUserVO(userRepository.save(user)));
     }
 
@@ -89,6 +91,7 @@ public class AdminUserController {
         user.setHospitalName(requireText(dto.getHospitalName(), "请输入医院名称"));
         user.setDepartmentName(requireText(dto.getDepartmentName(), "请输入科室名称"));
         user.setRole(dto.getRole() == null ? UserRole.DEPARTMENT : dto.getRole());
+        user.setAvatarUrl(AvatarUrls.normalize(user.getAvatarUrl(), user.getRole()));
         return ApiResponse.ok(VoMappers.toUserVO(userRepository.save(user)));
     }
 
@@ -122,6 +125,7 @@ public class AdminUserController {
         if (user.getRole() == UserRole.ADMIN && userRepository.countByRole(UserRole.ADMIN) <= 1) {
             throw new BizException(400, "系统至少需要保留一个管理员账户");
         }
+        ensureAccountNotLoggedIn(user);
         ensureAccountNotUsingDevice(user);
         userRepository.delete(user);
         return ApiResponse.ok(null);
@@ -153,6 +157,12 @@ public class AdminUserController {
     private void ensureAccountNotUsingDevice(User user) {
         if (user != null && deviceLockService.hasActiveLockForHolder(user.getUsername())) {
             throw new BizException(409, "该账户当前正在使用设备，请等待检测、报告下载和归档完成后再修改账户信息");
+        }
+    }
+
+    private void ensureAccountNotLoggedIn(User user) {
+        if (UserSessionStatus.isOnline(user)) {
+            throw new BizException(409, "该账户当前处于登录状态，不能删除");
         }
     }
 

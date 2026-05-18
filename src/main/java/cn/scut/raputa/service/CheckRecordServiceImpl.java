@@ -88,10 +88,10 @@ public class CheckRecordServiceImpl implements CheckRecordService {
             e.setCheckTime(LocalDateTime.now(CheckRecord.ZONE_CN));
         } else {
             try {
-                // 解析 ISO-8601，本地时间；如果传的是 UTC 带 Z，可先 OffsetDateTime->LocalDateTime
+
                 e.setCheckTime(LocalDateTime.parse(dto.getCheckTime()));
             } catch (DateTimeParseException ex) {
-                // 兜底：使用服务器当前时间
+
                 e.setCheckTime(LocalDateTime.now(CheckRecord.ZONE_CN));
             }
         }

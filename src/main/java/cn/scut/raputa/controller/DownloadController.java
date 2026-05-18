@@ -1,4 +1,3 @@
-// cn/scut/raputa/controller/DownloadController.java
 package cn.scut.raputa.controller;
 
 import cn.scut.raputa.entity.PatientFile;
@@ -34,7 +33,6 @@ public class DownloadController {
     private final PatientFileService patientFileService;
     private final FileStorageService fileStorageService;
 
-    /** 1) 单个文件下载（前端传 fileId） */
     @GetMapping("/file")
     public void downloadSingle(@RequestParam("fileId") String fileId, HttpServletResponse resp) throws IOException {
         PatientFile patientFile = patientFileService.listByIds(List.of(fileId)).stream()
@@ -59,7 +57,6 @@ public class DownloadController {
         }
     }
 
-    /** 2) 批量下载（指定某个患者，结合筛选条件） */
     @PostMapping("/patient-zip")
     public void downloadPatientZip(@RequestBody PatientZipReq req, HttpServletResponse resp) throws IOException {
         List<String> patientIds = Collections.singletonList(req.getPatientId());
@@ -71,7 +68,6 @@ public class DownloadController {
         streamZip(files, zipName, resp);
     }
 
-    /** 3) 批量下载（全局，支持多患者 + 条件） */
     @PostMapping("/all-zip")
     public void downloadAllZip(@RequestBody AllZipReq req, HttpServletResponse resp) throws IOException {
         List<PatientFile> files = patientFileService.listFiles(req.getDate(), req.getPatientIds(), req.getTypes(), req.getFilenameLike());
@@ -81,13 +77,10 @@ public class DownloadController {
         streamZip(files, zipName, resp);
     }
 
-    // ---------- 内部工具 ----------
-
     private void streamZip(List<PatientFile> files, String zipName, HttpServletResponse resp) throws IOException {
         resp.setHeader(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename*=UTF-8''" + urlEncode(zipName));
         resp.setContentType("application/zip");
 
-        // ZIP 内的目录结构：patientId/yyyy-MM-dd/HH-mm-ss/文件名
         DateTimeFormatter DATE = DateTimeFormatter.ofPattern("yyyy-MM-dd");
         DateTimeFormatter TIME = DateTimeFormatter.ofPattern("HH-mm-ss");
 
@@ -147,23 +140,21 @@ public class DownloadController {
         return candidate;
     }
 
-    // ---------- 请求体 ----------
-
     @Data
     public static class PatientZipReq {
         private String patientId;
         @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
-        private LocalDate date;             // 可空
-        private List<String> types;         // 可空
-        private String filenameLike;        // 可空
+        private LocalDate date;
+        private List<String> types;
+        private String filenameLike;
     }
 
     @Data
     public static class AllZipReq {
         @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
-        private LocalDate date;             // 可空
-        private List<String> patientIds;    // 可空
-        private List<String> types;         // 可空
-        private String filenameLike;        // 可空
+        private LocalDate date;
+        private List<String> patientIds;
+        private List<String> types;
+        private String filenameLike;
     }
 }

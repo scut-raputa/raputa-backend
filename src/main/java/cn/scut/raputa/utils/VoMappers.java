@@ -9,13 +9,11 @@ import java.time.format.DateTimeParseException;
 import cn.scut.raputa.entity.Appointment;
 import cn.scut.raputa.entity.CheckRecord;
 import cn.scut.raputa.entity.Device;
-import cn.scut.raputa.entity.Model;
 import cn.scut.raputa.entity.Patient;
 import cn.scut.raputa.entity.User;
 import cn.scut.raputa.vo.AppointmentVO;
 import cn.scut.raputa.vo.CheckRecordVO;
 import cn.scut.raputa.vo.DeviceVO;
-import cn.scut.raputa.vo.ModelVO;
 import cn.scut.raputa.vo.PatientVO;
 import cn.scut.raputa.vo.UserVO;
 
@@ -39,7 +37,9 @@ public final class VoMappers {
                 .createdAt(u.getCreatedAt())
                 .lastLoginAt(u.getLastLoginAt())
                 .lastLoginIp(u.getLastLoginIp())
-                .avatarUrl(u.getAvatarUrl() != null ? u.getAvatarUrl() : "/images/default-avatar.png")
+                .lastSeenAt(u.getLastSeenAt())
+                .online(UserSessionStatus.isOnline(u))
+                .avatarUrl(AvatarUrls.normalize(u.getAvatarUrl(), u.getRole()))
                 .role(u.getRole())
                 .build();
     }
@@ -82,11 +82,11 @@ public final class VoMappers {
                 String yy = s.substring(6, 8);
                 String mm = s.substring(8, 10);
                 String dd = s.substring(10, 12);
-                String yyyy = "19" + yy; // 15位身份证通常为19xx
+                String yyyy = "19" + yy;
                 return LocalDate.parse(yyyy + mm + dd, DateTimeFormatter.ofPattern("yyyyMMdd"));
             }
         } catch (DateTimeParseException | IndexOutOfBoundsException e) {
-            // 解析失败返回 null
+
         }
         return null;
     }
@@ -119,20 +119,6 @@ public final class VoMappers {
                 .build();
     }
 
-    public static ModelVO toModelVO(Model m) {
-        return ModelVO.builder()
-                .id(m.getId())
-                .func(m.getFunc())
-                .name(m.getName())
-                .uploadTime(m.getUploadTime() == null ? null : m.getUploadTime().toString())
-                .uploader(m.getUploader())
-                .remark(m.getRemark())
-                .accuracy(m.getAccuracy() == null ? null : m.getAccuracy().doubleValue())
-                .sensitivity(m.getSensitivity() == null ? null : m.getSensitivity().doubleValue())
-                .specificity(m.getSpecificity() == null ? null : m.getSpecificity().doubleValue())
-                .build();
-    }
-
     public static DeviceVO toDeviceVO(Device d) {
         return DeviceVO.builder()
                 .id(d.getId())
@@ -147,10 +133,9 @@ public final class VoMappers {
             .accessMode(d.getAccessMode())
             .controlPort(d.getControlPort())
             .rtspPath(d.getRtspPath())
-            .enabled(d.getEnabled())
+                .enabled(d.getEnabled())
                 .description(d.getDescription())
                 .storageLocation(d.getStorageLocation())
-                .responsible(d.getResponsible())
                 .build();
     }
 

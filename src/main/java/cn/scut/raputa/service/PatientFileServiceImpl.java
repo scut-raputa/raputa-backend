@@ -1,4 +1,3 @@
-// cn/scut/raputa/service/impl/PatientFileServiceImpl.java
 package cn.scut.raputa.service;
 
 import cn.scut.raputa.entity.Patient;
@@ -61,10 +60,9 @@ public class PatientFileServiceImpl implements PatientFileService {
 
     @Override
     public List<PatientFilesOverviewVO> overview(LocalDate date, List<String> filterPatientIds, List<String> fileTypes, String fileNameLike) {
-        // 1) 所有患者（用于“无记录也返回”）
+
         List<Patient> patients = patientRepository.findAll();
 
-        // 2) 构建筛选
         Specification<PatientFile> spec = (root, q, cb) -> {
             var ps = new java.util.ArrayList<Predicate>();
 
@@ -91,12 +89,10 @@ public class PatientFileServiceImpl implements PatientFileService {
             return ps.isEmpty() ? cb.conjunction() : cb.and(ps.toArray(new Predicate[0]));
         };
 
-
-        // 3) 拉取匹配的文件
         List<PatientFile> files = patientFileRepository.findAll(spec);
         ensureFileIds(files);
 
-        // 4) patientId -> (date -> (sessionGroup -> files))
+        // patientId -> date -> session group -> files
         Map<String, Map<LocalDate, Map<String, List<PatientFile>>>> grouped =
                 files.stream().collect(Collectors.groupingBy(
                         PatientFile::getPatientId,
@@ -106,7 +102,6 @@ public class PatientFileServiceImpl implements PatientFileService {
                         )
                 ));
 
-        // 5) 组装 VO（所有患者都要返回）
         List<PatientFilesOverviewVO> out = new ArrayList<>();
         for (Patient p : patients) {
             if (filterPatientIds != null && !filterPatientIds.isEmpty()
@@ -121,16 +116,14 @@ public class PatientFileServiceImpl implements PatientFileService {
             vo.setId(p.getId());
             vo.setName(p.getName());
 
-            // === 用 keySet + 排序，避免比较器上的通配符陷阱 ===
             List<LocalDate> dateKeys = new ArrayList<>(byDate.keySet());
-            // 日期倒序（最近在前）
+
             dateKeys.sort(Comparator.reverseOrder());
 
             List<PatientFilesOverviewVO.DateGroup> dates = new ArrayList<>();
             for (LocalDate dKey : dateKeys) {
                 Map<String, List<PatientFile>> timesMap = byDate.getOrDefault(dKey, Collections.emptyMap());
 
-                // 时间（HH:mm:ss）升序
                 List<String> timeKeys = new ArrayList<>(timesMap.keySet());
                 Collections.sort(timeKeys);
 
@@ -165,7 +158,6 @@ public class PatientFileServiceImpl implements PatientFileService {
             out.add(vo);
         }
 
-        // 最终整体排序：patientId 倒序（也可以按 admit 或 name，看你需求）
         out.sort(Comparator.comparing(PatientFilesOverviewVO::getId).reversed());
         return out;
     }

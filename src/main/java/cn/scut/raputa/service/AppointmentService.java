@@ -10,8 +10,6 @@ public interface AppointmentService {
 
     AppointmentVO create(AppointmentCreateDTO dto);
 
-    //PatientVO updateDeptAndAddress(String id, @NotBlank String dept, @NotBlank String address);
-
     void deleteById(String id);
 
     AppointmentVO update(String id, AppointmentUpdateDTO dto);
