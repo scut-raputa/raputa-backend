@@ -4,6 +4,7 @@ import cn.scut.raputa.entity.User;
 import cn.scut.raputa.enums.UserRole;
 import cn.scut.raputa.exception.BizException;
 import cn.scut.raputa.repository.UserRepository;
+import cn.scut.raputa.utils.AvatarUrls;
 import cn.scut.raputa.utils.JwtService;
 import cn.scut.raputa.utils.VoMappers;
 import cn.scut.raputa.vo.AuthVO;
@@ -40,8 +41,8 @@ public class UserServiceImpl implements UserService {
         user.setHospitalName(hospitalName);
         user.setDepartmentName(departmentName);
         user.setEnabled(true);
-        user.setAvatarUrl("/images/default-avatar.png");
         user.setRole(UserRole.DEPARTMENT);
+        user.setAvatarUrl(AvatarUrls.forRole(user.getRole()));
         try {
             return userRepository.save(user);
         } catch (org.springframework.dao.DataIntegrityViolationException e) {
@@ -89,12 +90,25 @@ public class UserServiceImpl implements UserService {
         int n = userRepository.touchLogin(u.getId(), now, ip);
         u.setLastLoginAt(now);
         u.setLastLoginIp(ip);
+        u.setSessionActive(true);
+        u.setLastSeenAt(now);
         if (n != 1) {
             log.warn("touchLogin affected {} rows for userId={}, fallback to save()", n, u.getId());
             u.setLastLoginAt(now);
             u.setLastLoginIp(ip);
+            u.setSessionActive(true);
+            u.setLastSeenAt(now);
             userRepository.save(u);
         }
+    }
+
+    @Override
+    @Transactional
+    public void markLoggedOut(String username) {
+        if (username == null || username.isBlank()) {
+            return;
+        }
+        userRepository.markLoggedOut(username, LocalDateTime.now(User.ZONE_CN));
     }
 
 }

@@ -1,4 +1,3 @@
-// cn/scut/raputa/controller/PatientFileController.java
 package cn.scut.raputa.controller;
 
 import cn.scut.raputa.response.ApiResponse;
@@ -19,16 +18,15 @@ public class PatientFileController {
 
     private final PatientFileService patientFileService;
 
-    // 概览接口：把所有患者都返回（没记录的 dates 为空）
     @GetMapping("/overview")
     public ApiResponse<List<PatientFilesOverviewVO>> overview(
             @RequestParam(required = false)
             @DateTimeFormat(iso = DateTimeFormat.ISO.DATE)
-            LocalDate date, // 前端“按天筛选”（可空）
+            LocalDate date,
 
-            @RequestParam(required = false) String patientIds, // 逗号分隔
-            @RequestParam(required = false) String types,      // 逗号分隔: csv,wav,pdf
-            @RequestParam(required = false) String filename    // 模糊匹配
+            @RequestParam(required = false) String patientIds,
+            @RequestParam(required = false) String types,
+            @RequestParam(required = false) String filename
     ) {
         List<String> idList = split(patientIds);
         List<String> typeList = split(types);

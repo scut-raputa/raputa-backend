@@ -10,6 +10,9 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 @Schema(description = "设备发现响应")
 public class DeviceDiscoveryResponseDTO {
+
+    @Schema(description = "设备编号", example = "DIS-1921683129")
+    private String deviceId;
     
     @Schema(description = "设备IP地址", example = "192.168.1.100")
     private String deviceIp;
@@ -25,6 +28,9 @@ public class DeviceDiscoveryResponseDTO {
     
     @Schema(description = "设备信息", example = "{\"version\":\"1.0\",\"type\":\"raspberry\"}")
     private String deviceInfo;
+
+    @Schema(description = "RTSP路径", example = "/stream/audio")
+    private String rtspPath;
 }
 
 

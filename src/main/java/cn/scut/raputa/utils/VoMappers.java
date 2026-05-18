@@ -4,15 +4,16 @@ import java.time.LocalDate;
 import java.time.Period;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 
 import cn.scut.raputa.entity.Appointment;
 import cn.scut.raputa.entity.CheckRecord;
-import cn.scut.raputa.entity.Model;
+import cn.scut.raputa.entity.Device;
 import cn.scut.raputa.entity.Patient;
 import cn.scut.raputa.entity.User;
 import cn.scut.raputa.vo.AppointmentVO;
 import cn.scut.raputa.vo.CheckRecordVO;
-import cn.scut.raputa.vo.ModelVO;
+import cn.scut.raputa.vo.DeviceVO;
 import cn.scut.raputa.vo.PatientVO;
 import cn.scut.raputa.vo.UserVO;
 
@@ -21,6 +22,7 @@ public final class VoMappers {
     }
 
     private static final DateTimeFormatter DTF = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+    private static final DateTimeFormatter DTMF = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
     private static final ZoneId CCT = ZoneId.of("Asia/Shanghai");
 
     public static UserVO toUserVO(User u) {
@@ -35,37 +37,74 @@ public final class VoMappers {
                 .createdAt(u.getCreatedAt())
                 .lastLoginAt(u.getLastLoginAt())
                 .lastLoginIp(u.getLastLoginIp())
-                .avatarUrl(u.getAvatarUrl() != null ? u.getAvatarUrl() : "/images/default-avatar.png")
+                .lastSeenAt(u.getLastSeenAt())
+                .online(UserSessionStatus.isOnline(u))
+                .avatarUrl(AvatarUrls.normalize(u.getAvatarUrl(), u.getRole()))
                 .role(u.getRole())
                 .build();
     }
 
     public static PatientVO toPatientVO(Patient p) {
         Integer age = null;
-        if (p.getBirth() != null) {
-            age = Period.between(p.getBirth(), LocalDate.now(CCT)).getYears();
+        LocalDate birth = null;
+        if (p != null && p.getIdCard() != null && !p.getIdCard().isBlank()) {
+            birth = parseBirthFromIdCard(p.getIdCard());
+            if (birth != null) {
+                age = Period.between(birth, LocalDate.now(CCT)).getYears();
+            }
         }
         return PatientVO.builder()
                 .id(p.getId())
                 .outpatientId(p.getOutpatientId())
+                .idCard(p.getIdCard())
                 .name(p.getName())
                 .gender(p.getGender())
                 .age(age)
-                .birth(p.getBirth() == null ? null : p.getBirth().format(DTF))
+                .birth(birth == null ? null : birth.format(DTF))
                 .admit(p.getAdmit() == null ? null : p.getAdmit().format(DTF))
                 .dept(p.getDept())
-                .address(p.getAddress())
+                .onsetDate(p.getOnsetDate())
+                .bedNumber(p.getBedNumber())
+                .course(p.getCourse())
+                .pastHistory(p.getPastHistory())
                 .checked(p.isChecked())
                 .build();
     }
 
+    private static LocalDate parseBirthFromIdCard(String idCard) {
+        if (idCard == null) return null;
+        String s = idCard.trim();
+        try {
+            if (s.length() == 18) {
+                String ymd = s.substring(6, 14); // yyyyMMdd
+                return LocalDate.parse(ymd, DateTimeFormatter.ofPattern("yyyyMMdd"));
+            } else if (s.length() == 15) {
+                String yy = s.substring(6, 8);
+                String mm = s.substring(8, 10);
+                String dd = s.substring(10, 12);
+                String yyyy = "19" + yy;
+                return LocalDate.parse(yyyy + mm + dd, DateTimeFormatter.ofPattern("yyyyMMdd"));
+            }
+        } catch (DateTimeParseException | IndexOutOfBoundsException e) {
+
+        }
+        return null;
+    }
+
     public static AppointmentVO toAppointmentVO(Appointment a) {
-        DateTimeFormatter TF = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
+        DateTimeFormatter TF = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+        LocalDate birth = parseBirthFromIdCard(a.getIdCard());
         return AppointmentVO.builder()
                 .id(a.getId())
                 .name(a.getName())
+                .gender(a.getGender())
+                .idCard(a.getIdCard())
+                .birth(birth == null ? null : birth.format(DTF))
+                .age(birth == null ? null : Period.between(birth, LocalDate.now(CCT)).getYears())
+                .phone(a.getPhone())
                 .dept(a.getDept())
                 .time(a.getApptTime() == null ? null : a.getApptTime().format(TF))
+                .status(a.getStatus() == null || a.getStatus().isBlank() ? "PENDING" : a.getStatus())
                 .build();
     }
 
@@ -80,17 +119,23 @@ public final class VoMappers {
                 .build();
     }
 
-    public static ModelVO toModelVO(Model m) {
-        return ModelVO.builder()
-                .id(m.getId())
-                .func(m.getFunc())
-                .name(m.getName())
-                .uploadTime(m.getUploadTime() == null ? null : m.getUploadTime().toString())
-                .uploader(m.getUploader())
-                .remark(m.getRemark())
-                .accuracy(m.getAccuracy() == null ? null : m.getAccuracy().doubleValue())
-                .sensitivity(m.getSensitivity() == null ? null : m.getSensitivity().doubleValue())
-                .specificity(m.getSpecificity() == null ? null : m.getSpecificity().doubleValue())
+    public static DeviceVO toDeviceVO(Device d) {
+        return DeviceVO.builder()
+                .id(d.getId())
+                .name(d.getName())
+                .ip(d.getIp())
+                .hardwareId(d.getHardwareId())
+                .lastConnectedTime(d.getLastConnectedTime() == null ? null
+                        : d.getLastConnectedTime().format(DTMF))
+            .lastSeenAt(d.getLastSeenAt() == null ? null
+                : d.getLastSeenAt().format(DTMF))
+                .status(d.getStatus())
+            .accessMode(d.getAccessMode())
+            .controlPort(d.getControlPort())
+            .rtspPath(d.getRtspPath())
+                .enabled(d.getEnabled())
+                .description(d.getDescription())
+                .storageLocation(d.getStorageLocation())
                 .build();
     }
 

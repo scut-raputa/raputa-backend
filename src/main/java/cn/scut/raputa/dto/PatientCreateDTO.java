@@ -3,6 +3,7 @@ package cn.scut.raputa.dto;
 import jakarta.validation.constraints.*;
 import lombok.*;
 import java.time.LocalDate;
+import com.fasterxml.jackson.annotation.JsonFormat;
 
 @Data
 @NoArgsConstructor
@@ -17,14 +18,24 @@ public class PatientCreateDTO {
     @Pattern(regexp = "男|女")
     private String gender;
 
-    @NotNull
-    private LocalDate birth;
+    @NotBlank
+    @Size(min = 18, max = 18)
+    private String idCard;
 
     @NotBlank
     @Size(max = 128)
     private String dept;
 
-    @NotBlank
-    @Size(max = 255)
-    private String address;
+    @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd")
+    private LocalDate onsetDate;
+
+    @Size(max = 2048)
+    private String pastHistory;
+
+    @Size(max = 32)
+    private String bedNumber;
+
+    @Size(max = 2048)
+    private String course;
+
 }

@@ -34,7 +34,6 @@ public class TempFileServiceImpl implements TempFileService {
         String ext = getExtensionLower(originalName);
         String contentType = file.getContentType();
 
-        // 允许：后缀 csv 或 content-type 包含 csv
         boolean looksLikeCsv = "csv".equalsIgnoreCase(ext)
                 || (contentType != null && contentType.toLowerCase().contains("csv"));
         if (!looksLikeCsv) {
@@ -114,12 +113,12 @@ public class TempFileServiceImpl implements TempFileService {
         repo.deleteById(tempId);
     }
 
-    // ---------- helpers ----------
+    // Helpers
 
     private static String sanitize(String name) {
         if (name == null)
             return "unknown.csv";
-        return Paths.get(name).getFileName().toString(); // 只保留文件名，防路径穿越
+        return Paths.get(name).getFileName().toString();
     }
 
     private static String getExtensionLower(String filename) {

@@ -11,4 +11,6 @@ public interface PatientRepository extends JpaRepository<Patient, String>, JpaSp
     long countByAdmit(LocalDate admit);
 
     boolean existsByOutpatientId(String outpatientId);
+
+    boolean existsByIdCardAndIdNot(String trim, String id);
 }

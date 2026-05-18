@@ -9,27 +9,14 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.zip.CRC32;
 
-/**
- * 网络工具类 - 处理UDP数据包解析
- * 
- * @author RAPUTA Team
- */
 @Slf4j
 public class SocketTools {
-    
-    private static final ObjectMapper objectMapper = new ObjectMapper();
-    
-    /**
-     * 解析缓冲区数据 - 按照原始协议格式解析
-     * 
-     * @param buffer 接收到的数据缓冲区
-     * @return 解析后的数据列表
-     */
 
+    private static final ObjectMapper objectMapper = new ObjectMapper();
 
     public static List<byte[]> anlyBufData(byte[] byteBuf) {
         List<byte[]> dList = new ArrayList<>();
-        
+
         try {
             int start = 0, end = start + 4;
             byte[] fhead = subArray(byteBuf, start, end);
@@ -38,17 +25,17 @@ public class SocketTools {
                 return null;
             }
             dList.add(fhead);
-            
+
             start = end;
             end = start + 4;
             byte[] fx = subArray(byteBuf, start, end);
             dList.add(fx);
-            
+
             start = end;
             end = start + 4;
             byte[] ft = subArray(byteBuf, start, end);
             dList.add(ft);
-            
+
             start = end;
             end = start + 4;
             byte[] fel = subArray(byteBuf, start, end);
@@ -57,18 +44,17 @@ public class SocketTools {
                 log.error("数据长度无效");
                 return null;
             }
-            
+
             start = end;
             end = start + (sdleng - 8);
             byte[] fdatas = subArray(byteBuf, start, end);
             dList.add(fdatas);
-            
-            // CRC32校验 - 参考原始项目逻辑
+
             CRC32 crc32 = new CRC32();
             crc32.update(subArray(byteBuf, 0, end));
             String js_crc = Long.toHexString(crc32.getValue());
             js_crc = hexTo8(js_crc);
-            
+
             start = end;
             end = start + 4;
             byte[] fcrc32 = subArray(byteBuf, start, end);
@@ -78,7 +64,7 @@ public class SocketTools {
                 return null;
             }
             dList.add(fcrc32);
-            
+
             start = end;
             end = start + 4;
             byte[] fend = subArray(byteBuf, start, end);
@@ -87,41 +73,28 @@ public class SocketTools {
                 return null;
             }
             dList.add(fend);
-            
+
         } catch (Exception e) {
             log.error("解析缓冲区数据失败", e);
             return null;
         }
-        
+
         return dList;
     }
-    
-    /**
-     * 解析JSON字符串
-     * 
-     * @param jsonString JSON字符串
-     * @return JSON对象
-     */
+
     public static JsonNode getJsonObject(String jsonString) {
         try {
-            // 清理字符串，移除可能的控制字符
+
             String cleanedJson = jsonString.trim().replaceAll("[\\x00-\\x1F\\x7F]", "");
             log.debug("清理后的JSON: {}", cleanedJson);
-            
+
             return objectMapper.readTree(cleanedJson);
         } catch (Exception e) {
             log.error("解析JSON字符串失败: {}", jsonString, e);
             return objectMapper.createObjectNode();
         }
     }
-    
-    /**
-     * 验证是否为有效的JSON字符串
-     * 参考原项目 SocketTools.isJsonString
-     * 
-     * @param json JSON字符串
-     * @return 是否为有效JSON
-     */
+
     public static boolean isJsonString(String json) {
         try {
             String cleanedJson = json.trim().replaceAll("[\\x00-\\x1F\\x7F]", "");
@@ -148,7 +121,6 @@ public class SocketTools {
         CRC32 crc32 = new CRC32();
         crc32.update(rArr1);
         String crc32_u16=Long.toHexString(crc32.getValue());
-        // System.out.println("CRC32:"+crc32_u16);
         int u16=Integer.parseInt(crc32_u16,16);
         byte[] f_crc=getU16ToByte(u16);
         byte[] f_e=getU16ToByte(0xaa55);
@@ -157,24 +129,16 @@ public class SocketTools {
         return rArr1;
     }
 
-
-
-    /**
-     * 验证IP地址格式
-     * 
-     * @param ip IP地址字符串
-     * @return 是否为有效IP地址
-     */
     public static boolean isValidIpAddress(String ip) {
         if (ip == null || ip.trim().isEmpty()) {
             return false;
         }
-        
+
         String[] parts = ip.split("\\.");
         if (parts.length != 4) {
             return false;
         }
-        
+
         try {
             for (String part : parts) {
                 int num = Integer.parseInt(part);
@@ -187,21 +151,19 @@ public class SocketTools {
             return false;
         }
     }
-    
-    // ========== 以下为原始工具方法 ==========
-    
+
     public static byte[] getU16ToByte(int u16) {
         ByteBuffer byB = ByteBuffer.wrap(new byte[4]);
         byB.asIntBuffer().put(u16);
         return byB.array();
     }
-    
+
     public static byte[] getLongToByte(long lg) {
         ByteBuffer buffer = ByteBuffer.allocate(Long.BYTES);
         buffer.putLong(lg);
         return buffer.array();
     }
-    
+
     public static byte[] byteArrAdd(byte[] barr1, byte[] barr2) {
         byte[] nArr = new byte[barr1.length + barr2.length];
         for (int i = 0; i < barr1.length; i++) {
@@ -213,9 +175,7 @@ public class SocketTools {
         }
         return nArr;
     }
-    
 
-    
     public static byte[] subArray(byte[] barr1, int sindex, int eindex) {
         if (eindex < sindex)
             return barr1;
@@ -229,7 +189,7 @@ public class SocketTools {
         }
         return nArr;
     }
-    
+
     public static String hexTo8(String shex) {
         int i_hex = shex.length(), len = 8;
         int c_len = len - i_hex;
@@ -238,14 +198,14 @@ public class SocketTools {
             ss = ss + "0";
         return ss + shex;
     }
-    
+
     public static int bytesToInt(byte[] b) {
         ByteBuffer buffer = ByteBuffer.allocate(Integer.BYTES);
         buffer.put(b);
         buffer.flip(); // need flip
         return buffer.getInt();
     }
-    
+
     public static String encodeHexString(byte[] data) {
         StringBuilder sb = new StringBuilder();
         for (byte b : data) {
@@ -254,9 +214,6 @@ public class SocketTools {
         return sb.toString();
     }
 
-    /**
-     * 获取新数组（移除前n个元素）
-     */
     public static byte[] getNewArray(byte[] barr1, int index) {
         if (index < 0)
             return barr1;

@@ -11,11 +11,6 @@ import io.swagger.v3.oas.models.Components;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
-/**
- * Swagger/OpenAPI 配置类
- * 
- * @author RAPUTA Team
- */
 @Configuration
 public class SwaggerConfig {
 
@@ -35,7 +30,7 @@ public class SwaggerConfig {
                                 .url("https://opensource.org/licenses/MIT")))
                 .addSecurityItem(new SecurityRequirement().addList("Bearer Authentication"))
                 .components(new Components()
-                        .addSecuritySchemes("Bearer Authentication", 
+                        .addSecuritySchemes("Bearer Authentication",
                                 new SecurityScheme()
                                         .type(SecurityScheme.Type.HTTP)
                                         .scheme("bearer")
@@ -43,5 +38,4 @@ public class SwaggerConfig {
                                         .description("请输入JWT Token")));
     }
 }
-
 

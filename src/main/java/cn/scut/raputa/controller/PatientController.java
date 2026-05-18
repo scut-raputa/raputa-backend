@@ -1,7 +1,6 @@
 package cn.scut.raputa.controller;
 
 import cn.scut.raputa.dto.PatientCreateDTO;
-import cn.scut.raputa.dto.PatientUpdateDTO;
 import cn.scut.raputa.response.ApiResponse;
 import cn.scut.raputa.service.PatientService;
 import cn.scut.raputa.vo.PatientVO;
@@ -10,6 +9,8 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+
+import java.time.LocalDate;
 
 @RestController
 @RequestMapping("/api/patient")
@@ -25,11 +26,14 @@ public class PatientController {
             @RequestParam(required = false) String id,
             @RequestParam(required = false) String name,
             @RequestParam(required = false) String dept,
-            @RequestParam(required = false) String address,
             @RequestParam(required = false) String gender,
             @RequestParam(required = false) String admit,
-            @RequestParam(required = false) Boolean checked) {
-        Page<PatientVO> pg = patientService.page(page, size, id, name, dept, address, gender, admit, checked);
+            @RequestParam(required = false) Boolean checked,
+            @RequestParam(required = false) LocalDate onsetDate,
+            @RequestParam(required = false) String pastHistory,
+            @RequestParam(required = false) String bedNumber,
+            @RequestParam(required = false) String course) {
+        Page<PatientVO> pg = patientService.page(page, size, id, name, dept,  gender, admit, checked, onsetDate, pastHistory, bedNumber, course);
         return ApiResponse.ok(new PageWrap<>(pg.getContent(), pg.getTotalElements()));
     }
 
@@ -41,8 +45,8 @@ public class PatientController {
 
     @PatchMapping("/{id}")
     public ApiResponse<PatientVO> update(@PathVariable String id,
-            @Valid @RequestBody PatientUpdateDTO dto) {
-        PatientVO vo = patientService.updateDeptAndAddress(id, dto.getDept(), dto.getAddress());
+            @Valid @RequestBody PatientCreateDTO dto) {
+        PatientVO vo = patientService.update(id, dto);
         return ApiResponse.ok(vo);
     }
 

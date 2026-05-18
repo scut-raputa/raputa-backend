@@ -44,6 +44,12 @@ public class User {
     @Column(name = "last_login_ip", length = 64)
     private String lastLoginIp;
 
+    @Column(name = "session_active", nullable = false, columnDefinition = "bit(1) default b'0'")
+    private Boolean sessionActive = false;
+
+    @Column(name = "last_seen_at")
+    private LocalDateTime lastSeenAt;
+
     @Column(name = "avatar_url", length = 255)
     private String avatarUrl;
 
@@ -62,6 +68,9 @@ public class User {
     private void prePersist() {
         if (createdAt == null) {
             createdAt = LocalDateTime.now(ZONE_CN);
+        }
+        if (sessionActive == null) {
+            sessionActive = false;
         }
     }
 

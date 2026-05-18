@@ -11,7 +11,10 @@ import java.time.LocalDateTime;
 @Table(name = "patient", indexes = {
         @Index(name = "idx_patient_name", columnList = "name"),
         @Index(name = "idx_patient_dept", columnList = "dept"),
-        @Index(name = "idx_patient_admit", columnList = "admit")
+        @Index(name = "idx_patient_admit", columnList = "admit"),
+        @Index(name = "idx_patient_id_card", columnList = "id_card"),
+        @Index(name = "idx_patient_outpatient_id", columnList = "outpatient_id"),
+        @Index(name = "idx_patient_bed", columnList = "bed_number")
 })
 public class Patient {
 
@@ -22,6 +25,9 @@ public class Patient {
     @Column(name = "outpatient_id", nullable = false, length = 32, unique = true)
     private String outpatientId;
 
+    @Column(name = "id_card", length = 18, unique = true)
+    private String idCard;
+
     @Column(nullable = false, length = 64)
     private String name;
 
@@ -29,16 +35,25 @@ public class Patient {
     private String gender;
 
     @Column(nullable = false)
-    private LocalDate birth;
-
-    @Column(nullable = false)
     private LocalDate admit;
+
+    @Column(name = "onset_date")
+    private LocalDate onsetDate;
 
     @Column(length = 128)
     private String dept;
 
     @Column(length = 255)
     private String address;
+
+    @Column(name = "past_history", length = 2048)
+    private String pastHistory;
+
+    @Column(name = "bed_number", length = 32)
+    private String bedNumber;
+
+    @Column(length = 2048)
+    private String course;
 
     @Column(nullable = false)
     private boolean checked;

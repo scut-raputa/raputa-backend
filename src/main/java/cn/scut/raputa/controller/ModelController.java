@@ -2,9 +2,7 @@ package cn.scut.raputa.controller;
 
 import cn.scut.raputa.response.ApiResponse;
 import cn.scut.raputa.service.ModelService;
-import cn.scut.raputa.vo.ModelVO;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.Page;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -14,19 +12,17 @@ public class ModelController {
 
     private final ModelService modelService;
 
-    @GetMapping
-    public ApiResponse<?> list(
-            @RequestParam(defaultValue = "1") int page,
-            @RequestParam(defaultValue = "8") int size,
-            @RequestParam(required = false) String id,
-            @RequestParam(required = false) String func,
+    @GetMapping("/runtime-list")
+    public ApiResponse<?> runtimeList(
             @RequestParam(required = false) String name,
-            @RequestParam(required = false) String uploader,
-            @RequestParam(required = false) String date) {
-        Page<ModelVO> pg = modelService.page(page, size, id, func, name, uploader, date);
-        return ApiResponse.ok(new PageWrap<>(pg.getContent(), pg.getTotalElements()));
+            @RequestParam(required = false) String taskType,
+            @RequestParam(required = false) Boolean loaded,
+            @RequestParam(required = false) Boolean available) {
+        return ApiResponse.ok(modelService.runtimeList(name, taskType, loaded, available));
     }
 
-    public record PageWrap<T>(java.util.List<T> items, long total) {
+    @GetMapping("/runtime-summary")
+    public ApiResponse<?> runtimeSummary() {
+        return ApiResponse.ok(modelService.runtimeSummary());
     }
 }

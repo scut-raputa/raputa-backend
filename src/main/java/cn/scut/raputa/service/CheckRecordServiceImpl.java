@@ -2,8 +2,10 @@ package cn.scut.raputa.service;
 
 import cn.scut.raputa.dto.CheckRecordDTO;
 import cn.scut.raputa.entity.CheckRecord;
+import cn.scut.raputa.entity.Patient;
 import cn.scut.raputa.enums.CheckResult;
 import cn.scut.raputa.repository.CheckRecordRepository;
+import cn.scut.raputa.repository.PatientRepository;
 import cn.scut.raputa.utils.VoMappers;
 import cn.scut.raputa.vo.CheckRecordVO;
 import lombok.RequiredArgsConstructor;
@@ -21,6 +23,7 @@ import java.util.List;
 public class CheckRecordServiceImpl implements CheckRecordService {
 
     private final CheckRecordRepository checkRecordRepository;
+    private final PatientRepository patientRepository;
 
     @Override
     public Page<CheckRecordVO> page(int page, int size, String id, String name, String staff, String result,
@@ -76,15 +79,19 @@ public class CheckRecordServiceImpl implements CheckRecordService {
         e.setName(dto.getName());
         e.setStaff(dto.getStaff());
         e.setResult(cr);
+        patientRepository.findById(dto.getPatientId())
+                .map(Patient::getDept)
+                .filter(dept -> dept != null && !dept.isBlank())
+                .ifPresent(e::setPatientDeptSnapshot);
 
         if (isBlank(dto.getCheckTime())) {
             e.setCheckTime(LocalDateTime.now(CheckRecord.ZONE_CN));
         } else {
             try {
-                // 解析 ISO-8601，本地时间；如果传的是 UTC 带 Z，可先 OffsetDateTime->LocalDateTime
+
                 e.setCheckTime(LocalDateTime.parse(dto.getCheckTime()));
             } catch (DateTimeParseException ex) {
-                // 兜底：使用服务器当前时间
+
                 e.setCheckTime(LocalDateTime.now(CheckRecord.ZONE_CN));
             }
         }
@@ -104,7 +111,16 @@ public class CheckRecordServiceImpl implements CheckRecordService {
             if (r == null || r.isEmpty())
                 return null;
             CheckResult cr = CheckResult.fromLabel(r);
-            return (cr == null) ? null : cb.equal(root.get("result"), cr);
+            if (cr == null) {
+                return null;
+            }
+            if (cr.isAspiration()) {
+                return root.get("result").in(
+                        CheckResult.ASPIRATION,
+                        CheckResult.OVERT_ASPIRATION,
+                        CheckResult.SILENT_ASPIRATION);
+            }
+            return cb.equal(root.get("result"), cr);
         };
     }
 

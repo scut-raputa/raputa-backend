@@ -12,5 +12,7 @@ public interface UserService {
 
     void updateLastLogin(User u, String ip);
 
+    void markLoggedOut(String username);
+
     AuthVO login(String username, String rawPassword, String ip);
 }

@@ -1,51 +1,44 @@
 package cn.scut.raputa.service;
 
-import cn.scut.raputa.entity.Model;
-import cn.scut.raputa.repository.ModelRepository;
-import cn.scut.raputa.utils.VoMappers;
-import cn.scut.raputa.vo.ModelVO;
+import cn.scut.raputa.vo.RuntimeModelVO;
+import cn.scut.raputa.vo.RuntimeSummaryVO;
 import lombok.RequiredArgsConstructor;
-import org.springframework.data.domain.*;
-import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 
-import java.time.*;
+import java.util.List;
+import java.util.Locale;
+import java.util.stream.Stream;
 
 @Service
 @RequiredArgsConstructor
 public class ModelServiceImpl implements ModelService {
 
-    private final ModelRepository modelRepository;
+    private final InferenceRuntimeService inferenceRuntimeService;
 
     @Override
-    public Page<ModelVO> page(int page, int size, String id, String func, String name, String uploader, String date) {
-        Specification<Model> spec = Specification.<Model>unrestricted()
-                .and(likeIfPresent("id", id))
-                .and(likeIfPresent("func", func))
-                .and(likeIfPresent("name", name))
-                .and(likeIfPresent("uploader", uploader))
-                .and(dateIfPresent("uploadTime", date));
+    public List<RuntimeModelVO> runtimeList(String name, String taskType, Boolean loaded, Boolean available) {
+        Stream<RuntimeModelVO> stream = inferenceRuntimeService.getRuntimeModels().stream();
 
-        Page<Model> pg = modelRepository.findAll(
-                spec,
-                PageRequest.of(Math.max(page - 1, 0), Math.max(size, 1),
-                        Sort.by(Sort.Order.desc("uploadTime"),
-                                Sort.Order.desc("id"))));
-        return pg.map(VoMappers::toModelVO);
+        if (name != null && !name.isBlank()) {
+            String keyword = name.toLowerCase(Locale.ROOT);
+            stream = stream.filter(item -> item.getName() != null && item.getName().toLowerCase(Locale.ROOT).contains(keyword));
+        }
+        if (taskType != null && !taskType.isBlank()) {
+            String keyword = taskType.toLowerCase(Locale.ROOT);
+            stream = stream.filter(item -> item.getTaskType() != null && item.getTaskType().toLowerCase(Locale.ROOT).contains(keyword));
+        }
+        if (loaded != null) {
+            stream = stream.filter(item -> item.isLoaded() == loaded);
+        }
+        if (available != null) {
+            stream = stream.filter(item -> (item.isLoaded() && item.isServiceLive() && item.isServiceReady()) == available);
+        }
+
+        return stream.toList();
     }
 
-    private Specification<Model> likeIfPresent(String field, String q) {
-        return (root, query, cb) -> (q == null || q.isEmpty()) ? null : cb.like(root.get(field), "%" + q + "%");
-    }
-
-    private Specification<Model> dateIfPresent(String field, String d) {
-        return (root, query, cb) -> {
-            if (d == null || d.isEmpty())
-                return null;
-            LocalDate day = LocalDate.parse(d);
-            LocalDateTime start = day.atStartOfDay();
-            LocalDateTime end = start.plusDays(1);
-            return cb.between(root.get(field), start, end);
-        };
+    @Override
+    public RuntimeSummaryVO runtimeSummary() {
+        return inferenceRuntimeService.getRuntimeSummary();
     }
 }

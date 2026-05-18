@@ -7,8 +7,8 @@ spring:
 
   datasource:
     url: jdbc:mysql://127.0.0.1:3306/raputa?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai
-    username: yuuka
-    password: yuuka2025
+    username: root
+    password: 12345678
     driver-class-name: com.mysql.cj.jdbc.Driver
 
   jpa:
@@ -27,9 +27,32 @@ security:
 
 raputa:
   storage:
-    tmp-dir: /tmp/raputa/tmp
+    root: ${RAPUTA_STORAGE_ROOT:/tmp/raputa/storage}
+    tmp-dir: ${RAPUTA_TMP_DIR:/tmp/raputa/tmp}
+  inference:
+    base-url: ${RAPUTA_INFERENCE_BASE_URL:http://127.0.0.1:8000}
+    dysphagia-base-url: ${RAPUTA_DYS_INFERENCE_BASE_URL:http://127.0.0.1:8001}
+    aspiration-base-url: ${RAPUTA_ASP_INFERENCE_BASE_URL:http://127.0.0.1:8002}
+    connect-timeout-ms: 3000
+    read-timeout-ms: 15000
+    health-path: /health
+    live-path: /health/live
+    ready-path: /health/ready
+    models-path: /models
+    upload-predict-path: /upload_predict/
+    dysphagia-auto-predict-path: /upload_predict/dys/
+    dysphagia-direct-predict-path: /upload_predict/dys_direct/
+    aspiration-auto-predict-path: /upload_predict/
+    aspiration-direct-predict-path: /upload_predict/asp_direct/
+    health-check-interval-seconds: 10
+  model:
+    runtime-cache-ttl-seconds: 10
+  device-lock:
+    ttl-seconds: 45
+    heartbeat-interval-seconds: 15
+    cleaner-interval-seconds: 30
 
-# SpringDoc OpenAPI 配置
+# SpringDoc OpenAPI
 springdoc:
   api-docs:
     path: /api-docs
@@ -43,3 +66,7 @@ springdoc:
     showExtensions: true
     showCommonExtensions: true
   show-actuator: false
+
+logging:
+  level:
+    org.hibernate.orm.connections.pooling: warn

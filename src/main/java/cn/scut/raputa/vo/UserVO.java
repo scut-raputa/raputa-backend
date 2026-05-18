@@ -19,6 +19,8 @@ public class UserVO {
     private LocalDateTime createdAt;
     private LocalDateTime lastLoginAt;
     private String lastLoginIp;
+    private LocalDateTime lastSeenAt;
+    private Boolean online;
     private String avatarUrl;
     private UserRole role;
 }
